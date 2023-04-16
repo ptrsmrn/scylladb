@@ -149,6 +149,7 @@ std::optional<sstring> check_restricted_replication_strategy(
     }
     sstring replication_strategy = locator::abstract_replication_strategy::to_qualified_class_name(
         *attrs.get_replication_strategy_class());
+    auto& topology = qp.proxy().get_token_metadata_ptr()->get_topology();
     // SimpleStrategy is not recommended in any setup which already has - or
     // may have in the future - multiple racks or DCs. So depending on how
     // protective we are configured, let's prevent it or allow with a warning:
@@ -170,14 +171,14 @@ std::optional<sstring> check_restricted_replication_strategy(
         case db::tri_mode_restriction_t::mode::FALSE:
             // Scylla was configured to allow SimpleStrategy, but let's warn
             // if it's used on a cluster which *already* has multiple DCs:
-            if (qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1) {
+            if (topology.get_datacenter_endpoints().size() > 1) {
                 return "Using SimpleStrategy in a multi-datacenter environment is not recommended.";
             }
             break;
         }
     }
-    // The minimum_keyspace_rf configuration option can be used to forbid
-    // a lower replication factor. We assume that all numeric replication
+    // The {minimum,maximum}_replication_factor_{warn,fail}_threshold configuration option can be used to forbid
+    // a lower/greater replication factor. We assume that all numeric replication
     // options are replication factors - this is true for SimpleStrategy and
     // NetworkTopologyStrategy but in the future if we add more strategies,
     // we may need to limit this test only to specific options.
@@ -188,13 +189,50 @@ std::optional<sstring> check_restricted_replication_strategy(
     for (auto opt : attrs.get_replication_options()) {
         try {
             auto rf = std::stol(opt.second);
-            if (rf > 0 && rf < qp.proxy().data_dictionary().get_config().minimum_keyspace_rf()) {
-                throw exceptions::configuration_exception(format(
-                    "Replication factor {}={} is forbidden by the current "
-                    "configuration setting of minimum_keyspace_rf={}. Please "
-                    "increase replication factor, or lower minimum_keyspace_rf "
-                    "set in the configuration.", opt.first, opt.second,
-                    qp.proxy().data_dictionary().get_config().minimum_keyspace_rf()));
+            if (rf > 0) {
+                if (auto min_fail = qp.proxy().data_dictionary().get_config().minimum_replication_factor_fail_threshold();
+                    min_fail >= 0 && rf < min_fail) {
+                    throw exceptions::configuration_exception(format(
+                            "Replication factor {}={} is forbidden by the current "
+                            "configuration setting of minimum_replication_factor_fail_threshold={}. Please "
+                            "increase replication factor, or lower minimum_replication_factor_fail_threshold "
+                            "set in the configuration.", opt.first, opt.second,
+                            qp.proxy().data_dictionary().get_config().minimum_replication_factor_fail_threshold()));
+                }
+                else if (auto max_fail = qp.proxy().data_dictionary().get_config().maximum_replication_factor_fail_threshold();
+                         max_fail >= 0 && rf > max_fail) {
+                    throw exceptions::configuration_exception(format(
+                            "Replication factor {}={} is forbidden by the current "
+                            "configuration setting of maximum_replication_factor_fail_threshold={}. Please "
+                            "decrease replication factor, or increase maximum_replication_factor_fail_threshold "
+                            "set in the configuration.", opt.first, opt.second,
+                            qp.proxy().data_dictionary().get_config().maximum_replication_factor_fail_threshold()));
+                }
+                else if (auto min_warn = qp.proxy().data_dictionary().get_config().minimum_replication_factor_warn_threshold();
+                         min_warn >= 0 && rf < min_warn)
+                {
+                    return format("Using Replication Factor {} lower than the "
+                                  "minimum_replication_factor_warn_threshold={} is not recommended.",
+                                  rf, qp.proxy().data_dictionary().get_config().minimum_replication_factor_warn_threshold());
+                }
+                else if (auto max_warn = qp.proxy().data_dictionary().get_config().maximum_replication_factor_warn_threshold();
+                        max_warn >= 0 && rf > max_warn)
+                {
+                    return format("Using Replication Factor {} greater than the "
+                                  "maximum_replication_factor_warn_threshold={} is not recommended.",
+                                  rf, qp.proxy().data_dictionary().get_config().maximum_replication_factor_warn_threshold());
+                }
+                else if (auto dc_nodes_count = topology.get_datacenter_endpoints().at(topology.get_datacenter()).size();
+                        rf > dc_nodes_count)
+                {
+                    return format("Using Replication Factor {} greater than the "
+                                  "number of nodes in this DC ({}) is not recommended.",
+                                  rf, dc_nodes_count);
+                }
+                else if (rf % 2 == 0)
+                {
+                    return format("Using even Replication Factor {} is not recommended.", rf);
+                }
             }
         } catch (std::invalid_argument&) {
         } catch (std::out_of_range& ) {

@@ -572,3 +572,15 @@ force_schema_commit_log: true
 # A cluster not using Raft can be 'upgraded' to use Raft. Refer to the aforementioned
 # documentation, section 'Enabling Raft in ScyllaDB 5.2 and further', for the procedure.
 consistent_cluster_management: true
+
+# Guardrails to warn or fail when the minimum/maximum replication factor is smaller/greater than the threshold.
+# Note that the minimum threshold takes number of nodes into account, and the real minimum threshold value is:
+#   the minimum of (1) the replication factor and (2) the number of nodes
+#   - so whichever value is lower, it is the value of the minimum threshold.
+# Please also do note that the value of 0 is always allowed for the minimum threshold
+#   and means that no replication at all, i.e. RF = 0, is allowed.
+# A value < 0, e.g. -1, mean the guardrail is disabled
+minimum_replication_factor_fail_threshold: 3
+# minimum_replication_factor_warn_threshold: -1
+maximum_replication_factor_warn_threshold: 3
+# maximum_replication_factor_fail_threshold: -1
