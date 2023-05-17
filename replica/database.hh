@@ -396,13 +396,16 @@ public:
         cache_temperature rate;
         lowres_clock::time_point last_updated;
     };
+
+    void deregister_metrics();
+
 private:
     schema_ptr _schema;
     config _config;
     locator::effective_replication_map_ptr _erm;
     lw_shared_ptr<const storage_options> _storage_opts;
     mutable table_stats _stats;
-    mutable db::view::stats _view_stats;
+    mutable std::unique_ptr<db::view::stats> _view_stats;
     mutable row_locker::stats _row_locker_stats;
 
     uint64_t _failed_counter_applies_to_memtable = 0;
@@ -454,7 +457,7 @@ private:
     db::rate_limiter::label _rate_limiter_label_for_reads;
 
     void set_metrics();
-    seastar::metrics::metric_groups _metrics;
+    std::unique_ptr<seastar::metrics::metric_groups> _metrics = std::make_unique<seastar::metrics::metric_groups>();
 
     // holds average cache hit rate of all shards
     // recalculated periodically
@@ -932,7 +935,7 @@ public:
     }
 
     const db::view::stats& get_view_stats() const {
-        return _view_stats;
+        return *_view_stats;
     }
 
     replica::cf_stats* cf_stats() {

@@ -16,6 +16,22 @@ from cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_i
 
 from util import new_test_table, unique_name, unique_key_int
 
+
+# Reproduces #13548:
+# Create a huge index on a table and immediately recreate the table (drop and create)
+# With `--enable-keyspace-column-family-metrics 1` cmd line param, this should slow down the view builder
+# (which is busy building the index), enough to get rid of the first table object from the `database` object
+# but also allow for creating another table with the same name, which raises a double-metrics-registration exception
+def test_recreating_table_with_big_index(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        insert_statement = cql.prepare(f'INSERT INTO {table} (p,v) VALUES (?, ?)')
+        big_string = 'x'*665360
+        cql.execute(insert_statement, [0, big_string])
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+    # going out of scope DROPs the above table
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        pass
+
 # A reproducer for issue #7443: Normally, when the entire table is SELECTed,
 # the partitions are returned sorted by the partitions' token. When there
 # is filtering, this order is not expected to change. Furthermore, when this

@@ -963,7 +963,7 @@ void table::set_metrics() {
     auto ks = keyspace_label(_schema->ks_name());
     namespace ms = seastar::metrics;
     if (_config.enable_metrics_reporting) {
-        _metrics.add_group("column_family", {
+        _metrics->add_group("column_family", {
                 ms::make_counter("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks).set_skip_when_empty(),
                 ms::make_counter("memtable_partition_writes", [this] () { return _stats.memtable_partition_insertions + _stats.memtable_partition_hits; }, ms::description("Number of write operations performed on partitions in memtables"))(cf)(ks).set_skip_when_empty(),
                 ms::make_counter("memtable_partition_hits", _stats.memtable_partition_hits, ms::description("Number of times a write operation was issued on an existing partition in memtables"))(cf)(ks).set_skip_when_empty(),
@@ -985,7 +985,7 @@ void table::set_metrics() {
 
         // Metrics related to row locking
         auto add_row_lock_metrics = [this, ks, cf] (row_locker::single_lock_stats& stats, sstring stat_name) {
-            _metrics.add_group("column_family", {
+            _metrics->add_group("column_family", {
                 ms::make_total_operations(format("row_lock_{}_acquisitions", stat_name), stats.lock_acquisitions, ms::description(format("Row lock acquisitions for {} lock", stat_name)))(cf)(ks).set_skip_when_empty(),
                 ms::make_queue_length(format("row_lock_{}_operations_currently_waiting_for_lock", stat_name), stats.operations_currently_waiting_for_lock, ms::description(format("Operations currently waiting for {} lock", stat_name)))(cf)(ks),
                 ms::make_histogram(format("row_lock_{}_waiting_time", stat_name), ms::description(format("Histogram representing time that operations spent on waiting for {} lock", stat_name)),
@@ -999,11 +999,11 @@ void table::set_metrics() {
 
         // View metrics are created only for base tables, so there's no point in adding them to views (which cannot act as base tables for other views)
         if (!_schema->is_view()) {
-            _view_stats.register_stats();
+            _view_stats->register_stats();
         }
 
         if (!is_internal_keyspace(_schema->ks_name())) {
-            _metrics.add_group("column_family", {
+            _metrics->add_group("column_family", {
                     ms::make_summary("read_latency_summary", ms::description("Read latency summary"), [this] {return to_metrics_summary(_stats.reads.summary());})(cf)(ks).set_skip_when_empty(),
                     ms::make_summary("write_latency_summary", ms::description("Write latency summary"), [this] {return to_metrics_summary(_stats.writes.summary());})(cf)(ks).set_skip_when_empty(),
                     ms::make_summary("cas_prepare_latency_summary", ms::description("CAS prepare round latency summary"), [this] {return to_metrics_summary(_stats.cas_prepare.summary());})(cf)(ks).set_skip_when_empty(),
@@ -1019,6 +1019,11 @@ void table::set_metrics() {
             });
         }
     }
+}
+
+void table::deregister_metrics() {
+    _metrics.reset();
+    _view_stats.reset();
 }
 
 size_t compaction_group::live_sstable_count() const noexcept {
@@ -1529,10 +1534,10 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _config(std::move(config))
     , _erm(std::move(erm))
     , _storage_opts(std::move(sopts))
-    , _view_stats(format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()),
+    , _view_stats(std::make_unique<db::view::stats>(format("{}_{}_view_replica_update", _schema->ks_name(), _schema->cf_name()),
                          keyspace_label(_schema->ks_name()),
                          column_family_label(_schema->cf_name())
-                        )
+                        ))
     , _x_log2_compaction_groups(get_x_log2_compaction_groups(_config.x_log2_compaction_groups))
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
@@ -2040,7 +2045,7 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
         tracing::trace(tr_state, "Generated {} view update mutations", updates->size());
         auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(*updates));
         try {
-            co_await gen->mutate_MV(base_token, std::move(*updates), _view_stats, *_config.cf_stats, tr_state,
+            co_await gen->mutate_MV(base_token, std::move(*updates), *_view_stats, *_config.cf_stats, tr_state,
                 std::move(units), service::allow_hints::yes, db::view::wait_for_all_updates::no);
         } catch (...) {
             // Ignore exceptions: any individual failure to propagate a view update will be reported
@@ -2174,7 +2179,7 @@ future<> table::populate_views(
             size_t units_to_wait_for = std::min(_config.view_update_concurrency_semaphore_limit, update_size);
             auto units = co_await seastar::get_units(*_config.view_update_concurrency_semaphore, units_to_wait_for);
             units.adopt(seastar::consume_units(*_config.view_update_concurrency_semaphore, update_size - units_to_wait_for));
-            co_await gen->mutate_MV(base_token, std::move(*updates), _view_stats, *_config.cf_stats,
+            co_await gen->mutate_MV(base_token, std::move(*updates), *_view_stats, *_config.cf_stats,
                     tracing::trace_state_ptr(), std::move(units), service::allow_hints::no, db::view::wait_for_all_updates::yes);
         } catch (...) {
             if (!err) {
