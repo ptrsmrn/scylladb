@@ -292,3 +292,25 @@ async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
     await manager.api.move_tablet(servers[0].ip_addr, "test", "test", s1_host_id, dst_shard, replica[0], replica[1], tablet_token)
     rows = await cql.run_async("SELECT pk from test.test")
     assert len(list(rows)) == 0
+
+
+@pytest.mark.asyncio
+async def test_alter_keyspace(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
+                        "'replication_factor': 1, 'initial_tablets': 8};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    logger.info("Populating table")
+
+    # keys = range(8)
+    # await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    await cql.run_async("DROP KEYSPACE test;")
+
+# TODO: add alter ks tests with the following scenarios:
+# - in-/decreasing RF by 2+ should fail
+# - in-/decrement RF by 1 a couple of times and assert tablets are rebalanced after each RF change
+# - test re-balancing in a cluster with many DCs and assign different RFs to different DCs and make 1 DC with 0 replicas

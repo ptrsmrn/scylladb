@@ -22,6 +22,7 @@
 #include "gms/feature_service.hh"
 
 bool is_system_keyspace(std::string_view keyspace);
+static logging::logger mylogger("alter_keyspace");
 
 cql3::statements::alter_keyspace_statement::alter_keyspace_statement(sstring name, ::shared_ptr<ks_prop_defs> attrs)
     : _name(name)
@@ -48,6 +49,30 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
         if (!bool(_attrs->get_replication_strategy_class()) && !_attrs->get_replication_options().empty()) {
             throw exceptions::configuration_exception("Missing replication strategy class");
         }
+
+        // allow to create new DC with a couple of nodes - have a test case for that
+        if (qp.db().find_keyspace(_name).get_replication_strategy().is_per_table()) {
+            mylogger.warn("smaron wchodzimy");
+            const auto& old_replication_options = qp.db().find_keyspace(_name).metadata()->strategy_options();
+            const auto& new_replication_options = _attrs->get_replication_options();
+            for (auto const& [new_dc_name, new_rf] : new_replication_options) {
+                if (new_rf == "0") // We allow for a DC to not have any replicas at all, whatever the previous value of RF was
+                    continue;
+                mylogger.warn("smaron new dc:{} rf:{}", new_dc_name, new_rf);
+
+                for (auto& [first, second] : old_replication_options)
+                    mylogger.warn("first {} second {}", first, second);
+
+                if (const auto old_dc = old_replication_options.find(std::string(new_dc_name)); old_dc != old_replication_options.end()) {
+                    const auto& old_rf = old_dc->second;
+                    mylogger.warn("smaron old dc:{} rf:{}", old_dc->first, old_rf);
+                    if (std::abs(std::stoi(new_rf) - std::stoi(old_rf)) > 1)
+                        throw exceptions::invalid_request_exception(format("Cannot alter an RF by more than 1 for {}, previous RF={}, new RF={}",
+                                                                           new_dc_name, old_rf, new_rf));
+                }
+            }
+        }
+
         try {
             data_dictionary::storage_options current_options = qp.db().find_keyspace(_name).metadata()->get_storage_options();
             data_dictionary::storage_options new_options = _attrs->get_storage_options();
@@ -77,8 +102,14 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     try {
+        bool is_per_table = qp.db().find_keyspace(_name).get_replication_strategy().is_per_table();
         auto old_ksm = qp.db().find_keyspace(_name).metadata();
         const auto& tm = *qp.proxy().get_token_metadata_ptr();
+
+        if (is_per_table) {
+
+            old_ksm->strategy_options();
+        }
 
         auto m = service::prepare_keyspace_update_announcement(qp.db().real_database(), _attrs->as_ks_metadata_update(old_ksm, tm), ts);
 
@@ -99,7 +130,6 @@ cql3::statements::alter_keyspace_statement::prepare(data_dictionary::database db
     return std::make_unique<prepared_statement>(make_shared<alter_keyspace_statement>(*this));
 }
 
-static logging::logger mylogger("alter_keyspace");
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::alter_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {

@@ -26,6 +26,15 @@ if '--raft' in sys.argv:
     run_with_raft.orig_cmd = cmd
     cmd = run_with_raft
 
+if '--tablets' in sys.argv:
+    sys.argv.remove('--tablets')
+    def run_with_tablets(pid, dir):
+        (c, e) = run_with_tablets.orig_cmd(pid, dir)
+        return (c + ['--experimental-features', 'consistent-topology-changes', '--experimental-features', 'tablets'], e)
+    run_with_tablets.orig_cmd = cmd
+    cmd = run_with_tablets
+
+
 if "-h" in sys.argv or "--help" in sys.argv:
     run.run_pytest(sys.path[0], sys.argv)
     exit(0)
