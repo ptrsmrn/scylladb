@@ -71,6 +71,7 @@ using request_param = std::variant<join_param, rebuild_param, replace_param>;
 enum class global_topology_request: uint16_t {
     new_cdc_generation,
     cleanup,
+    keyspace_rf_change,
 };
 
 struct ring_slice {
@@ -157,6 +158,10 @@ struct topology {
     // e.g. when a new node bootstraps, needed in `commit_cdc_generation` transition state.
     // It's used as the first column of the clustering key in CDC_GENERATIONS_V3 table.
     std::optional<utils::UUID> new_cdc_generation_data_uuid;
+
+    // TODO: provide descriptions
+    std::optional<sstring> new_keyspace_rf_change_ks_name;
+    std::optional<std::unordered_map<sstring, sstring>> new_keyspace_rf_change_rf_per_dc;
 
     // The IDs of the committed yet unpublished CDC generations sorted by timestamps.
     std::vector<cdc::generation_id_v2> unpublished_cdc_generations;

@@ -45,6 +45,9 @@ protected:
     template<std::ranges::range C>
     requires std::convertible_to<std::ranges::range_value_t<C>, data_value>
     Builder& apply_set(const char* cell, collection_apply_mode apply_mode, const C& c);
+    template<std::ranges::range C>
+//    requires std::convertible_to<std::ranges::range<C, C>, data_value>
+    Builder& apply_map(const char* cell, collection_apply_mode apply_mode, const C& c);
     Builder& set(const char* cell, node_state value);
     Builder& set(const char* cell, topology_request value);
     Builder& set(const char* cell, const sstring& value);
@@ -114,6 +117,7 @@ public:
     topology_mutation_builder& set_tablet_balancing_enabled(bool);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_committed_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
+    topology_mutation_builder& set_new_keyspace_rf_change_data(const sstring &ks_name, const std::map<sstring, unsigned int> &rf_per_dc);
     topology_mutation_builder& set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
     topology_mutation_builder& set_global_topology_request(global_topology_request);
     topology_mutation_builder& set_upgrade_state(topology::upgrade_state_type);

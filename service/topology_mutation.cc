@@ -6,11 +6,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <boost/algorithm/string/join.hpp>
+#include <boost/range/adaptor/map.hpp>
 #include "db/system_keyspace.hh"
 #include "topology_mutation.hh"
 #include "types/tuple.hh"
 #include "types/types.hh"
 #include "types/set.hh"
+#include "types/map.hh"
 
 namespace db {
     extern thread_local data_type cdc_generation_ts_id_type;
@@ -211,6 +214,14 @@ topology_mutation_builder& topology_mutation_builder::set_committed_cdc_generati
         return make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));
     });
     return apply_set("committed_cdc_generations", collection_apply_mode::overwrite, std::move(dv));
+}
+
+topology_mutation_builder& topology_mutation_builder::set_new_keyspace_rf_change_data(
+        const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc) {
+    apply_atomic("new_keyspace_rf_change_ks_name", ks_name);
+    apply_atomic("new_keyspace_rf_change_rf_per_dc",
+                 make_map_value(schema().get_column_definition("new_keyspace_rf_change_rf_per_dc")->type, values));
+    return *this;
 }
 
 topology_mutation_builder& topology_mutation_builder::set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values) {
