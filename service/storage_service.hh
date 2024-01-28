@@ -833,6 +833,7 @@ public:
     future<> topology_transition();
 
     future<> do_cluster_cleanup();
+    future<> alter_tablets_keyspace();
 
     // Starts the upgrade procedure to topology on raft.
     // Must be called on shard 0.
@@ -859,6 +860,10 @@ public:
     // It is incompatible with the `join_cluster` method.
     future<> start_maintenance_mode();
 
+    // Waits for a topology request with a given ID to complete and return non empty error string
+    // if request completes with an error
+    future<sstring> wait_for_topology_request_completion(utils::UUID id);
+
 private:
     // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
     // gossiper) to align it with the other raft topology nodes.
@@ -883,9 +888,6 @@ private:
 
     future<> _sstable_cleanup_fiber = make_ready_future<>();
     future<> sstable_cleanup_fiber(raft::server& raft, sharded<service::storage_proxy>& proxy) noexcept;
-    // Waits for a topology request with a given ID to complete and return non empty error string
-    // if request completes with an error
-    future<sstring> wait_for_topology_request_completion(utils::UUID id);
 
     // We need to be able to abort all group0 operation during shutdown, so we need special abort source for that
     abort_source _group0_as;
