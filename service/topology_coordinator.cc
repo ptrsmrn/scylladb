@@ -123,6 +123,10 @@ static bool is_streaming(const locator::tablet_transition_info* trinfo) {
             return false;
         case locator::tablet_transition_stage::cleanup:
             return false;
+        case locator::tablet_transition_stage::cleanup_target:
+            return false;
+        case locator::tablet_transition_stage::revert_migration:
+            return false;
         case locator::tablet_transition_stage::end_migration:
             return false;
     }
@@ -181,8 +185,10 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
     });
 
     if (nodes.empty()) {
+        rtlogger.info("upsize_tablet_replicas_to_rf: no nodes in DC {}", dc);
         co_return replicas;
     }
+
 
     // Compute tablet load on nodes.
 
@@ -230,17 +236,19 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
 
     if (!min_load_node) {
         stats.for_dc(dc).stop_no_candidates++;
+        rtlogger.info("upsize_tablet_replicas_to_rf: no nodes in DC {} to balance", dc);
         co_return replicas;
     }
 
-    if (nodes_to_drain.empty()) {
-        if (max_load == min_load || !tm->tablets().balancing_enabled()) {
-            // load is balanced.
-            // TODO: Evaluate and fix intra-node balance.
-            stats.for_dc(dc).stop_balance++;
-            co_return replicas;
-        }
-    }
+    // if (nodes_to_drain.empty()) {
+    //     if (max_load == min_load || !tm->tablets().balancing_enabled()) {
+    //         // load is balanced.
+    //         // TODO: Evaluate and fix intra-node balance.
+    //         stats.for_dc(dc).stop_balance++;
+    //         rtlogger.info("upsize_tablet_replicas_to_rf: load is balanced in DC {}", dc);
+    //         co_return replicas;
+    //     }
+    // }
 
     // We want to saturate the target node so we migrate several tablets in parallel, one for each shard
     // on the target node. This assumes that the target node is well-balanced and that tablet migrations
@@ -325,6 +333,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
 
     // heap which tracks most-loaded nodes in terms of avg_load.
     // It is used to find source tablet candidates.
+    rtlogger.info("upsize_tablet_replicas_to_rf: nodes: {}", nodes.size());
     std::vector<locator::host_id> nodes_by_load;
     nodes_by_load.reserve(nodes.size());
 
@@ -358,13 +367,20 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
     const size_t max_skipped_migrations = nodes[target].shards.size() * 2;
     size_t skipped_migrations = 0;
 
+    rtlogger.info("upsize_tablet_replicas_to_rf: balancing {} to {}", current_rf, new_rf);
+    rtlogger.info("upsize_tablet_replicas_to_rf: nodes_by_load: {}", nodes_by_load.size());
+
     while (new_replicas.size() < new_rf) {
         co_await coroutine::maybe_yield();
 
         // Pick a source tablet.
 
+        rtlogger.info("upsize_tablet_replicas_to_rf: nodes_by_load_dst: {}", nodes_by_load_dst.size());
+        rtlogger.info("upsize_tablet_replicas_to_rf: nodes_by_load: {}", nodes_by_load.size());
+
         if (nodes_by_load.empty()) {
             stats.for_dc(dc).stop_no_candidates++;
+            rtlogger.info("upsize_tablet_replicas_to_rf: no candidates in DC {}", dc);
             break;
         }
 
@@ -375,6 +391,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
         if (src_node_info.shards_by_load.empty()) {
             max_off_candidate_load = std::max(max_off_candidate_load, src_node_info.avg_load);
             nodes_by_load.pop_back();
+            rtlogger.info("upsize_tablet_replicas_to_rf: no candidates in node {}", src_host);
             continue;
         }
         auto push_back_node_candidate = seastar::defer([&] {
@@ -387,6 +404,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
         auto&& src_shard_info = src_node_info.shards[src_shard];
         if (src_shard_info.candidates.empty()) {
             src_node_info.shards_by_load.pop_back();
+            rtlogger.info("upsize_tablet_replicas_to_rf: no candidates in shard {} of node {}", src_shard, src_host);
             continue;
         }
         auto push_back_shard_candidate = seastar::defer([&] {
@@ -401,6 +419,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
 
         if (nodes_by_load_dst.empty()) {
             stats.for_dc(dc).stop_no_candidates++;
+            rtlogger.info("upsize_tablet_replicas_to_rf: no candidates in DC {}", dc);
             break;
         }
 
@@ -420,6 +439,8 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
                     max_rack_load = std::max(max_rack_load, rack_load[node.dc_rack().rack]);
                 }
             }
+
+            rtlogger.info("upsize_tablet_replicas_to_rf: rack_load: {}, max_rack_load: {}", rack_load, max_rack_load);
 
             auto end = nodes_by_load_dst.end();
             while (true) {
@@ -461,6 +482,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
         });
 
         // Check convergence conditions.
+        rtlogger.info("upsize_tablet_replicas_to_rf: source {} target {}", src, target);
 
         // When draining nodes, disable convergence checks so that all tablets are migrated away.
         if (nodes_to_drain.empty()) {
@@ -475,6 +497,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
             // to handle the case of off-candidates being empty. In that case, max_off_candidate_load is 0.
             if (std::max(max_off_candidate_load, src_node_info.avg_load) == target_info.avg_load) {
                 stats.for_dc(dc).stop_balance++;
+                rtlogger.info("upsize_tablet_replicas_to_rf: load is balanced in DC {}", dc);
                 break;
             }
 
@@ -482,6 +505,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
             // max_off_candidate_load may be higher than the load of current candidate.
             if (src_node_info.avg_load <= target_info.avg_load) {
                 stats.for_dc(dc).stop_no_candidates++;
+                rtlogger.info("upsize_tablet_replicas_to_rf: no candidates in DC {}", dc);
                 break;
             }
 
@@ -489,6 +513,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
             if (src_node_info.get_avg_load(nodes[src_host].tablet_count - 1) <
                     target_info.get_avg_load(target_info.tablet_count + 1)) {
                 stats.for_dc(dc).stop_load_inversion++;
+                rtlogger.info("upsize_tablet_replicas_to_rf: load inversion between {} and {}", src, target);
                 break;
             }
         }
@@ -499,6 +524,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
         bool has_replica_on_target = false;
         std::unordered_map<sstring, int> rack_load; // Will be built if check_rack_load
 
+        rtlogger.info("upsize_tablet_replicas_to_rf: line {}, nodes_to_drain: {}", __LINE__, nodes_to_drain.size());
         if (nodes_to_drain.empty()) {
             check_rack_load = target_node.dc_rack().rack != topo.get_node(src.host).dc_rack().rack;
             for (auto&& r: tmap.get_tablet_info(source_tablet.tablet).replicas) {
@@ -517,6 +543,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
 
         if (has_replica_on_target) {
             stats.for_dc(dc).tablets_skipped_node++;
+            rtlogger.info("upsize_tablet_replicas_to_rf: tablet {} already has replica on target {}", source_tablet, target);
             continue;
         }
 
@@ -541,11 +568,15 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
         auto mig = tablet_migration_info {kind, source_tablet, src, dst};
         auto mig_streaming_info = get_migration_streaming_info(topo, tmap.get_tablet_info(source_tablet.tablet), mig);
 
+        rtlogger.info("upsize_tablet_replicas_to_rf: migrating {} from {} to {}", source_tablet, src, dst);
         if (can_accept_load(mig_streaming_info)) {
+            rtlogger.info("upsize_tablet_replicas_to_rf: accepted migration {} from {} to {}", source_tablet, src, dst);
             apply_load(mig_streaming_info);
             stats.for_dc(dc).migrations_produced++;
             new_replicas.emplace_back(dst);
         } else {
+            rtlogger.info("upsize_tablet_replicas_to_rf: skipping migration {} from {} to {} because of streaming load",
+                source_tablet, src, dst);
             // Shards are overloaded with streaming. Do not include the migration in the plan, but
             // continue as if it was in the hope that we will find a migration which can be executed without
             // violating the load. Next make_plan() invocation will notice that the migration was not executed.
@@ -588,10 +619,14 @@ future<locator::tablet_map>
 reallocate_tablets_for_new_rf(schema_ptr s, locator::token_metadata_ptr tm,
     std::unordered_map<sstring, size_t> new_rf_per_dc) {
 
+    rtlogger.info("reallocate_tablets_for_new_rf: sorted_tokens: {}", tm->sorted_tokens());
+
     assert(!tm->sorted_tokens().empty());
 
     auto table_id = s->id();
     locator::tablet_map tablets = tm->tablets().get_tablet_map(table_id);
+
+    rtlogger.info("reallocate_tablets_for_new_rf: table {} new_rf_per_dc: {}", table_id, new_rf_per_dc);
 
     locator::load_sketch load(tm);
     co_await load.populate();
@@ -617,6 +652,9 @@ reallocate_tablets_for_new_rf(schema_ptr s, locator::token_metadata_ptr tm,
             dc_rep_factor[dc];
         }
 
+        rtlogger.info("reallocate_tablets_for_new_rf: tablet {} replicas: {}", tb, replicas);
+        rtlogger.info("reallocate_tablets_for_new_rf: tablet {} dc_rep_factor: {}", tb, dc_rep_factor);
+
         for (auto& [dc, rf] : dc_rep_factor) {
             co_await coroutine::maybe_yield();
 
@@ -632,9 +670,13 @@ reallocate_tablets_for_new_rf(schema_ptr s, locator::token_metadata_ptr tm,
 
             if (rf > new_rf) {
                 // remove replicas
+                rtlogger.info("reallocate_tablets_for_new_rf: tablet {} downsize replicas for DC {} from {} to {}",
+                    tb, dc, rf, new_rf);
                 downsize_tablet_replicas_to_rf(replicas, rf, new_rf, load, dc, host_id_to_dc);
             } else {
                 // add replicas
+                rtlogger.info("reallocate_tablets_for_new_rf: tablet {} upsize replicas for DC {} from {} to {}",
+                    tb, dc, rf, new_rf);
                 replicas = co_await upsize_tablet_replicas_to_rf(replicas, rf, new_rf, load, tm, dc, host_id_to_dc);
             }
         }
@@ -1316,13 +1358,35 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     rtlogger.info("przed co_await reallocate_tablets_for_new_rf");
                     auto new_tablet_map = co_await reallocate_tablets_for_new_rf(table, tmptr, new_rf_per_int_dc);
                     rtlogger.info("Updating tablet map for {}.{}", ks_name, table->cf_name());
+
+                    locator::tablet_map old_tablet_map = tmptr->tablets().get_tablet_map(table->id());
+
+                    for (auto tb : old_tablet_map.tablet_ids()) {
+                        const locator::tablet_info &ti = old_tablet_map.get_tablet_info(tb);
+                        locator::tablet_replica_set replicas = ti.replicas;
+                        rtlogger.info("smaron old tablet {} map for {}", tb, replicas);
+                    }
+
+                    // mock results returned from reallocate_tablets_for_new_rf
+                    // TODO: remove the mock once reallocate_tablets_for_new_rf is fixed
+                    for (auto tb : new_tablet_map.tablet_ids()) {
+                        locator::tablet_info &ti = new_tablet_map.get_tablet_info(tb);
+                        locator::tablet_replica_set& replicas = ti.replicas;
+                        auto last_replica = replicas[0];
+                        last_replica.shard = (last_replica.shard + 1) % 3;
+                        replicas.push_back(last_replica);
+                        rtlogger.info("smaron new tablet {} map for {}", tb, replicas);
+
+                    }
+
                     auto tablet_id = new_tablet_map.first_tablet();
                     while (true) {
                         auto& tablet_info = new_tablet_map.get_tablet_info(tablet_id);
                         auto last_token = new_tablet_map.get_last_token(tablet_id);
 
+                        // TODO: correctly handle setting next replicas
                         updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), table->id())
-                                                                     .set_replicas(last_token, tablet_info.replicas)
+                        .set_new_replicas(last_token, tablet_info.replicas)
                                                                      .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
                                                                      .set_transition(last_token, locator::tablet_transition_kind::rf_change)
                                                                      .build());

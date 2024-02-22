@@ -187,6 +187,12 @@ void tablet_map::check_tablet_id(tablet_id id) const {
     }
 }
 
+// TODO: remove when mocking of adding/removing tablets replicas is no longer needed
+tablet_info& tablet_map::get_tablet_info(tablet_id id)  {
+    check_tablet_id(id);
+    return _tablets[size_t(id)];
+}
+
 const tablet_info& tablet_map::get_tablet_info(tablet_id id) const {
     check_tablet_id(id);
     return _tablets[size_t(id)];

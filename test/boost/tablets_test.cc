@@ -1949,6 +1949,7 @@ SEASTAR_THREAD_TEST_CASE(test_reallocate_tablets_for_new_rf) {
         }
     }).get();
 
+    // TODO: this test doesn't work if we have only 1 DC
     std::map<sstring, sstring> options323 = {
         {"100", "3"},
         {"101", "2"},

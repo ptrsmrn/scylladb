@@ -1434,9 +1434,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("initializing query processor remote part");
-            // TODO: do this together with proxy.start_remote(...)
-            // TODO: Passing ss to qp fails, because ss has operator& overloaded, and it checks if ss is initialized already,
-            // but it is only below. OTOH ss requires initialized qp, so it's a chicken-egg problem.
+            // TODO: we're initializing qp below, but its ref is passed to the ss above,
+            //       which opens up a possibility of introducing a race in the future
+            //       - currently the code works just fine.
+            //      Other than that, we're creating a cyclic ref
             qp.invoke_on_all(&cql3::query_processor::start_remote, std::ref(mm), std::ref(forward_service),
                              std::ref(ss), std::ref(group0_client)).get();
             auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [&qp] {
