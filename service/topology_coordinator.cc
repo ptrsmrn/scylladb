@@ -1366,10 +1366,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     auto new_tablet_map = co_await reallocate_tablets_for_new_rf(table, tmptr, new_rf_per_int_dc);
                     rtlogger.info("Updating tablet map for {}.{}", ks_name, table->cf_name());
 
+                    locator::tablet_map old_tablet_map = tmptr->tablets().get_tablet_map(table->id());
+
+                    for (auto tb : old_tablet_map.tablet_ids()) {
+                        const locator::tablet_info &ti = old_tablet_map.get_tablet_info(tb);
+                        locator::tablet_replica_set replicas = ti.replicas;
+                        rtlogger.info("smaron old tablet {} map for {}", tb, replicas);
+                    }
+
                     for (auto tb : new_tablet_map.tablet_ids()) {
                         const locator::tablet_info &ti = new_tablet_map.get_tablet_info(tb);
                         locator::tablet_replica_set replicas = ti.replicas;
-                        rtlogger.info("smaron tablet {} map for {}", tb, replicas);
+                        rtlogger.info("smaron new tablet {} map for {}", tb, replicas);
                     }
 
                     auto tablet_id = new_tablet_map.first_tablet();
@@ -1377,8 +1385,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         auto& tablet_info = new_tablet_map.get_tablet_info(tablet_id);
                         auto last_token = new_tablet_map.get_last_token(tablet_id);
 
+                        // TODO: correctly handle setting next replicas
                         updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), table->id())
-                                                                     .set_replicas(last_token, tablet_info.replicas)
+                        .set_new_replicas(last_token, tablet_info.replicas)
                                                                      .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
                                                                      .set_transition(last_token, locator::tablet_transition_kind::rf_change)
                                                                      .build());
