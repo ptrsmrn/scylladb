@@ -219,6 +219,9 @@ topology_mutation_builder& topology_mutation_builder::set_committed_cdc_generati
 topology_mutation_builder& topology_mutation_builder::set_new_keyspace_rf_change_data(
         const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc) {
     apply_atomic("new_keyspace_rf_change_ks_name", ks_name);
+    map_type_impl::native_type values;
+    for (const auto& dc_rf : rf_per_dc)
+        values.emplace_back(dc_rf);
     apply_atomic("new_keyspace_rf_change_rf_per_dc",
                  make_map_value(schema().get_column_definition("new_keyspace_rf_change_rf_per_dc")->type, values));
     return *this;

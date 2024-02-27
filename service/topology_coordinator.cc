@@ -123,6 +123,10 @@ static bool is_streaming(const locator::tablet_transition_info* trinfo) {
             return false;
         case locator::tablet_transition_stage::cleanup:
             return false;
+        case locator::tablet_transition_stage::cleanup_target:
+            return false;
+        case locator::tablet_transition_stage::revert_migration:
+            return false;
         case locator::tablet_transition_stage::end_migration:
             return false;
     }
