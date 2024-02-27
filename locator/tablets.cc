@@ -187,10 +187,14 @@ void tablet_map::check_tablet_id(tablet_id id) const {
     }
 }
 
-const tablet_info& tablet_map::get_tablet_info(tablet_id id) const {
-    check_tablet_id(id);
-    return _tablets[size_t(id)];
-}
+    tablet_info& tablet_map::get_tablet_info(tablet_id id)  {
+        check_tablet_id(id);
+        return _tablets[size_t(id)];
+    }
+    const tablet_info& tablet_map::get_tablet_info(tablet_id id) const {
+        check_tablet_id(id);
+        return _tablets[size_t(id)];
+    }
 
 tablet_id tablet_map::get_tablet_id(token t) const {
     return tablet_id(dht::compaction_group_of(_log2_tablets, t));

@@ -332,6 +332,7 @@ public:
 
     /// Returns tablet_info associated with a given tablet.
     /// The given id must belong to this instance.
+    tablet_info& get_tablet_info(tablet_id);
     const tablet_info& get_tablet_info(tablet_id) const;
 
     /// Returns a pointer to tablet_transition_info associated with a given tablet.

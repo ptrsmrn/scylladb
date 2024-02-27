@@ -185,8 +185,6 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
         co_return replicas;
     }
 
-    bool balance_override_rf_higher_than_node_count = new_rf > nodes.size();
-    rtlogger.info("upsize_tablet_replicas_to_rf: balance_override_rf_higher_than_node_count: {}", balance_override_rf_higher_than_node_count);
 
     // Compute tablet load on nodes.
 
@@ -347,18 +345,13 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
         return nodes_cmp(b, a);
     };
 
-    if (balance_override_rf_higher_than_node_count) {
-        nodes_by_load.push_back(target);
-        nodes_by_load_dst.push_back(target);
-    } else {
-        for (auto&& [host, node_load] : nodes) {
-            if (host != target && (nodes_to_drain.empty() || nodes_to_drain.contains(host))) {
-                nodes_by_load.push_back(host);
-                std::make_heap(node_load.shards_by_load.begin(), node_load.shards_by_load.end(),
-                                node_load.shards_by_load_cmp());
-            } else {
-                nodes_by_load_dst.push_back(host);
-            }
+    for (auto&& [host, node_load] : nodes) {
+        if (host != target && (nodes_to_drain.empty() || nodes_to_drain.contains(host))) {
+            nodes_by_load.push_back(host);
+            std::make_heap(node_load.shards_by_load.begin(), node_load.shards_by_load.end(),
+                            node_load.shards_by_load_cmp());
+        } else {
+            nodes_by_load_dst.push_back(host);
         }
     }
 
@@ -423,8 +416,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
         if (nodes_by_load_dst.empty()) {
             stats.for_dc(dc).stop_no_candidates++;
             rtlogger.info("upsize_tablet_replicas_to_rf: no candidates in DC {}", dc);
-            if (!balance_override_rf_higher_than_node_count)
-                break;
+            break;
         }
 
         // The post-condition of this block is that nodes_by_load_dst.back() is a viable target node
@@ -502,8 +494,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
             if (std::max(max_off_candidate_load, src_node_info.avg_load) == target_info.avg_load) {
                 stats.for_dc(dc).stop_balance++;
                 rtlogger.info("upsize_tablet_replicas_to_rf: load is balanced in DC {}", dc);
-                if (!balance_override_rf_higher_than_node_count)
-                    break;
+                break;
             }
 
             // If balance is not achieved, still consider migrating from candidate nodes which have higher load than the target.
@@ -511,8 +502,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
             if (src_node_info.avg_load <= target_info.avg_load) {
                 stats.for_dc(dc).stop_no_candidates++;
                 rtlogger.info("upsize_tablet_replicas_to_rf: no candidates in DC {}", dc);
-                if (!balance_override_rf_higher_than_node_count)
-                    break;
+                break;
             }
 
             // Prevent load inversion which can lead to oscillations.
@@ -520,8 +510,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
                     target_info.get_avg_load(target_info.tablet_count + 1)) {
                 stats.for_dc(dc).stop_load_inversion++;
                 rtlogger.info("upsize_tablet_replicas_to_rf: load inversion between {} and {}", src, target);
-                if (!balance_override_rf_higher_than_node_count)
-                    break;
+                break;
             }
         }
 
@@ -548,7 +537,7 @@ static future<locator::tablet_replica_set> upsize_tablet_replicas_to_rf(const lo
             }
         }
 
-        if (has_replica_on_target && !balance_override_rf_higher_than_node_count) {
+        if (has_replica_on_target) {
             stats.for_dc(dc).tablets_skipped_node++;
             rtlogger.info("upsize_tablet_replicas_to_rf: tablet {} already has replica on target {}", source_tablet, target);
             continue;
@@ -1375,9 +1364,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
 
                     for (auto tb : new_tablet_map.tablet_ids()) {
-                        const locator::tablet_info &ti = new_tablet_map.get_tablet_info(tb);
-                        locator::tablet_replica_set replicas = ti.replicas;
+                        locator::tablet_info &ti = new_tablet_map.get_tablet_info(tb);
+                        locator::tablet_replica_set& replicas = ti.replicas;
+                        auto last_replica = replicas[0];
+                        last_replica.shard = (last_replica.shard + 1) % 3;
+                        replicas.push_back(last_replica);
                         rtlogger.info("smaron new tablet {} map for {}", tb, replicas);
+
                     }
 
                     auto tablet_id = new_tablet_map.first_tablet();
