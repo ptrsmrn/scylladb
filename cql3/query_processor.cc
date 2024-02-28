@@ -27,7 +27,14 @@
 #include "utils/hashers.hh"
 #include "utils/error_injection.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_service.hh"
+
+namespace service {
+class storage_service {
+public:
+    future<> alter_tablets_keyspace(sstring ks_name, std::map<sstring, sstring> replication_options,
+                                    std::optional<service::group0_guard>& guard);
+};
+}
 
 namespace cql3 {
 
@@ -1004,7 +1011,6 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
 
     cql3::cql_warnings_vec warnings;
 
-    // TODO: may require passing guard& and not only timestamp
     auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, guard->write_timestamp());
     warnings = std::move(cql_warnings);
 

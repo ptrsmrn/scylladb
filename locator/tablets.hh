@@ -174,7 +174,8 @@ enum class tablet_transition_kind {
     // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
     rebuild,
 
-    // TODO: provide description
+    // Tablet replica is either added or removed.
+    // The new replica is the same as the one it clones, except it's located on a different node/shard.
     rf_change,
 };
 
@@ -332,6 +333,7 @@ public:
 
     /// Returns tablet_info associated with a given tablet.
     /// The given id must belong to this instance.
+    // TODO: remove when mocking of adding/removing tablets replicas is no longer needed
     tablet_info& get_tablet_info(tablet_id);
     const tablet_info& get_tablet_info(tablet_id) const;
 

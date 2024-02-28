@@ -5651,6 +5651,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
 }
 }
 // TODO: remove this header. It's currently needed to throw cql3 exception if topology_global_queue_empty() == true
+//       maybe throw a different exception instead?
 #include "cql3/cql_statement.hh"
 namespace service {
     future<> storage_service::alter_tablets_keyspace(sstring ks_name, std::map<sstring, sstring> replication_options,
@@ -5686,8 +5687,8 @@ namespace service {
 
                     rtlogger.info("before co_await wait_for_topology_request_completion");
                     // TODO: fix waiting for global topology req
+                    //       this method doesn't wait for global requests, only for the non-global ones and cdc
 //                    auto error = co_await wait_for_topology_request_completion(request_id);
-//                    rtlogger.info("co_await wait_for_topology_request_completion done");
 //
 //                    if (!error.empty()) {
 //                        throw std::runtime_error(fmt::format("alter_tablets_keyspace failed with: {}", error));

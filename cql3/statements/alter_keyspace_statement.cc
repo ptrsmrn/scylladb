@@ -81,13 +81,6 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 #endif
 }
 
-// TODO: remove unnecessary headers, move others to the top of the file (once the PR compiles)
-#include "locator/load_sketch.hh"
-#include "service/topology_guard.hh"
-#include "service/topology_mutation.hh"
-#include "service/storage_service.hh"
-#include "locator/tablet_replication_strategy.hh"
-
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     try {
@@ -124,8 +117,12 @@ cql3::statements::alter_keyspace_statement::execute(query_processor& qp, service
     auto&& replication_strategy = qp.db().find_keyspace(_name).get_replication_strategy();
     if (replication_strategy.uses_tablets()) {
         // TODO: check if new RF differs by at most 1 from the old RF. Fail the query otherwise
-        // always bounce to shard 0?
-        // w ctorze alter statement wziac needs_guard
+        // TODO: should we always bounce to shard 0? If yes, then alter_keyspace_statement's ctor
+        //       would need to set needs_guard = true
+        // TODO: alter_tablets_keyspace takes guard& as a parameter below. This guard can be "consumed" by its internal
+        //       implementation, and if that happens, a new guard will be created in its place,
+        //       so that later this guard can be safely moved to schema_altering_statement::execute,
+        //       but it also means this whole operation will NOT execute under a single raft guard
         mylogger.warn("if (replication_strategy.uses_tablets()): {}, {}", _name, _attrs->get_replication_map());
         co_await qp.alter_tablets_keyspace(_name, _attrs->get_replication_map(), guard);
     }

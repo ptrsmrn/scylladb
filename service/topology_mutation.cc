@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <boost/algorithm/string/join.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include "db/system_keyspace.hh"
 #include "topology_mutation.hh"
 #include "types/tuple.hh"
@@ -219,11 +217,9 @@ topology_mutation_builder& topology_mutation_builder::set_committed_cdc_generati
 topology_mutation_builder& topology_mutation_builder::set_new_keyspace_rf_change_data(
         const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc) {
     apply_atomic("new_keyspace_rf_change_ks_name", ks_name);
-    map_type_impl::native_type values;
-    for (const auto& dc_rf : rf_per_dc)
-        values.emplace_back(dc_rf);
     apply_atomic("new_keyspace_rf_change_rf_per_dc",
-                 make_map_value(schema().get_column_definition("new_keyspace_rf_change_rf_per_dc")->type, values));
+                 make_map_value(schema().get_column_definition("new_keyspace_rf_change_rf_per_dc")->type,
+                                map_type_impl::native_type(rf_per_dc.begin(), rf_per_dc.end())));
     return *this;
 }
 

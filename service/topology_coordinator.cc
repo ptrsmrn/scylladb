@@ -1367,6 +1367,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         rtlogger.info("smaron old tablet {} map for {}", tb, replicas);
                     }
 
+                    // mock results returned from reallocate_tablets_for_new_rf
+                    // TODO: remove the mock once reallocate_tablets_for_new_rf is fixed
                     for (auto tb : new_tablet_map.tablet_ids()) {
                         locator::tablet_info &ti = new_tablet_map.get_tablet_info(tb);
                         locator::tablet_replica_set& replicas = ti.replicas;
