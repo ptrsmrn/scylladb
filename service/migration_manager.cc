@@ -969,6 +969,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
         },
         guard, std::move(description));
 
+    // TODO: no retry if group0_concurrent_modification, add it?
     co_return co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), &_as, raft_timeout{});
 }
 
