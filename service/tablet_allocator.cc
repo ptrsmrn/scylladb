@@ -16,6 +16,7 @@
 #include "utils/stall_free.hh"
 #include "db/config.hh"
 #include "locator/load_sketch.hh"
+#include "locator/network_topology_strategy.hh"
 #include <utility>
 
 using namespace locator;
@@ -51,6 +52,7 @@ struct load_balancer_cluster_stats {
 using dc_name = sstring;
 
 class load_balancer_stats_manager {
+    sstring group_name;
     std::unordered_map<dc_name, std::unique_ptr<load_balancer_dc_stats>> _dc_stats;
     std::unordered_map<host_id, std::unique_ptr<load_balancer_node_stats>> _node_stats;
     load_balancer_cluster_stats _cluster_stats;
@@ -61,7 +63,7 @@ class load_balancer_stats_manager {
     void setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats) {
         namespace sm = seastar::metrics;
         auto dc_lb = dc_label(dc);
-        _metrics.add_group("load_balancer", {
+        _metrics.add_group(group_name, {
             sm::make_counter("calls", sm::description("number of calls to the load balancer"),
                              stats.calls)(dc_lb),
             sm::make_counter("migrations_produced", sm::description("number of migrations produced by the load balancer"),
@@ -75,7 +77,7 @@ class load_balancer_stats_manager {
         namespace sm = seastar::metrics;
         auto dc_lb = dc_label(dc);
         auto node_lb = node_label(node);
-        _metrics.add_group("load_balancer", {
+        _metrics.add_group(group_name, {
             sm::make_gauge("load", sm::description("node load during last load balancing"),
                            stats.load)(dc_lb)(node_lb)
         });
@@ -84,7 +86,7 @@ class load_balancer_stats_manager {
     void setup_metrics(load_balancer_cluster_stats& stats) {
         namespace sm = seastar::metrics;
         // FIXME: we can probably improve it by making it per resize type (split, merge or none).
-        _metrics.add_group("load_balancer", {
+        _metrics.add_group(group_name, {
             sm::make_counter("resizes_emitted", sm::description("number of resizes produced by the load balancer"),
                 stats.resizes_emitted),
             sm::make_counter("resizes_revoked", sm::description("number of resizes revoked by the load balancer"),
@@ -94,7 +96,9 @@ class load_balancer_stats_manager {
         });
     }
 public:
-    load_balancer_stats_manager() {
+    load_balancer_stats_manager(sstring group_name = "load_balancer"):
+        group_name(std::move(group_name))
+    {
         setup_metrics(_cluster_stats);
     }
 
@@ -1145,6 +1149,58 @@ public:
         co_return std::move(plan);
     }
 };
+
+future<tablet_reallocation_result>
+reallocate_tablets_for_new_rf(const tablet_aware_replication_strategy* rep, schema_ptr s, token_metadata_ptr tm,
+    std::unordered_map<sstring, sstring> const& ks_options) {
+
+    auto* net_rep = dynamic_cast<const locator::network_topology_strategy*>(rep);
+
+    auto table_id = s->id();
+    tablet_map old_tablets = tm->tablets().get_tablet_map(table_id);
+    auto make_statuses = [&](tablet_reallocation_status status){
+        tablet_reallocation_result::status_map operation_statuses;
+        for (const auto& [dc, _] : ks_options) {
+            operation_statuses[dc].insert(status);
+        }
+        return operation_statuses;
+    };
+
+    if (!net_rep) {
+        co_return tablet_reallocation_result{ old_tablets, make_statuses(tablet_reallocation_status::unknown_topology_strategy) };
+    }
+
+    std::map<sstring, sstring> map_params(ks_options.cbegin(), ks_options.cend());
+    auto tablet_count = old_tablets.tablet_count();
+    locator::replication_strategy_params params{map_params, tablet_count};
+
+    auto new_rep = abstract_replication_strategy::create_replication_strategy(
+                "NetworkTopologyStrategy", params);
+
+    auto tablet_aware = new_rep->maybe_as_tablet_aware();
+
+    if (!tablet_aware) {
+        co_return tablet_reallocation_result{ old_tablets, make_statuses(tablet_reallocation_status::unknown_topology_strategy) };
+    }
+
+    try {
+        auto new_tablets = co_await tablet_aware->reallocate_tablets(s, tm, old_tablets);
+        co_return tablet_reallocation_result{ new_tablets, make_statuses(tablet_reallocation_status::success) };
+    } catch (exceptions::configuration_exception const& e) {
+        lblogger.warn("reallocate_tablets_for_new_rf_new: {}", e.what());
+        thread_local boost::regex re("Datacenter [0-9]+ doesn't have enough nodes for replication_factor=[0-9]+");
+        boost::cmatch what;
+        if (boost::regex_search(e.what(), what, re)) {
+            co_return tablet_reallocation_result{ old_tablets, make_statuses(tablet_reallocation_status::not_enough_nodes) };
+        } else {
+            throw;
+        }
+    } catch (...) {
+        throw;
+    }
+
+    co_return tablet_reallocation_result{ old_tablets, make_statuses(tablet_reallocation_status::unknown_topology_strategy) };
+}
 
 class tablet_allocator_impl : public tablet_allocator::impl
                             , public service::migration_listener::empty_listener {
