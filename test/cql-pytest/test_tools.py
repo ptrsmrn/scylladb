@@ -482,7 +482,9 @@ def test_scylla_sstable_script_slice(cql, test_keyspace, scylla_path, scylla_dat
         clustering_table_with_udt,
         table_with_counters,
 ])
-def test_scylla_sstable_script(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory):
+def test_scylla_sstable_script(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory, has_tablets):
+    if has_tablets and table_factory == table_with_counters: # issue #18180
+        return
     scripts_path = os.path.realpath(os.path.join(__file__, '../../../tools/scylla-sstable-scripts'))
     slice_script_path = os.path.join(scripts_path, 'slice.lua')
     dump_script_path = os.path.join(scripts_path, 'dump.lua')
