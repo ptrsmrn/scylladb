@@ -392,8 +392,28 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             auto addr = std::move(cs_sa.remote_address);
             fd.set_nodelay(true);
             fd.set_keepalive(keepalive);
+
+            // Get TLS info BEFORE creating connection (before streams are detached)
+            std::optional<sstring> ssl_protocol;
+            std::optional<sstring> ssl_cipher_suite;
+            bool ssl_enabled = is_tls;
+
+            if (is_tls && !shed) {
+                try {
+                    ssl_protocol = co_await tls::get_protocol_version(fd);
+                    ssl_cipher_suite = co_await tls::get_cipher_suite(fd);
+                } catch (...) {
+                    // Leave as nullopt on error, but still mark as TLS enabled
+                }
+            }
+
             auto conn = make_connection(server_addr, std::move(fd), std::move(addr),
                     _conns_cpu_concurrency_semaphore, std::move(units));
+            // Set the TLS info we gathered before detaching
+            conn->_ssl_enabled = ssl_enabled;
+            conn->_ssl_protocol = ssl_protocol;
+            conn->_ssl_cipher_suite = ssl_cipher_suite;
+
             if (shed) {
                 // We establish a connection even during shedding to notify the client;
                 // otherwise, they might hang waiting for a response.
@@ -406,30 +426,9 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                 continue;
             }
             // Move the processing into the background.
-            (void)futurize_invoke([this, conn, is_tls] {
+            (void)futurize_invoke([this, conn] {
                 // Build a future<> that completes after TLS info is populated (or reset on failure).
                 future<> tls_init = make_ready_future<>();
-
-                if (is_tls) {
-                    conn->_ssl_enabled = true;
-
-                    tls_init = tls::get_protocol_version(conn->_fd).then([conn](const sstring& protocol) {
-                        conn->_ssl_protocol = protocol;
-                        return tls::get_cipher_suite(conn->_fd);
-                    }).then([conn](const sstring& cipher_suite) {
-                        conn->_ssl_cipher_suite = cipher_suite;
-                        return make_ready_future<>();
-                    }).handle_exception([conn](std::exception_ptr) {
-                        conn->_ssl_enabled = true;
-                        conn->_ssl_protocol.reset();
-                        conn->_ssl_cipher_suite.reset();
-                    });
-                } else {
-                    conn->_ssl_enabled = false;
-                    conn->_ssl_protocol.reset();
-                    conn->_ssl_cipher_suite.reset();
-                }
-
                 return tls_init.then([conn] {
                     // Block while monitoring for lifetime/errors.
                     return conn->process();
