@@ -39,6 +39,7 @@ set(swagger_files
   api-doc/failure_detector.json
   api-doc/gossiper.json
   api-doc/hinted_handoff.json
+  api-doc/license.json
   api-doc/lsa.json
   api-doc/messaging_service.json
   api-doc/metrics.json
@@ -82,6 +83,7 @@ target_sources(api
     failure_detector.cc
     gossiper.cc
     hinted_handoff.cc
+    license.cc
     lsa.cc
     messaging_service.cc
     raft.cc

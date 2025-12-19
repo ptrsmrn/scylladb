@@ -1,0 +1,136 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/license",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/v2/license/status",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get license status (valid, expired, invalid, or no_license)",
+               "type":"license_status",
+               "nickname":"get_license_status",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
+         "path":"/v2/license/upload",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Upload a new license",
+               "type":"void",
+               "nickname":"upload_license",
+               "consumes":[
+                  "text/plain"
+               ],
+               "parameters":[
+                  {
+                     "name":"body",
+                     "description":"License content (data line + signature line)",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"body"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/v2/license/usage",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get license usage information including limits and current usage",
+               "type":"license_usage",
+               "nickname":"get_license_usage",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
+         "path":"/v2/license",
+         "operations":[
+            {
+               "method":"DELETE",
+               "summary":"Delete the current license (admin operation)",
+               "type":"void",
+               "nickname":"delete_license",
+               "parameters":[]
+            }
+         ]
+      }
+   ],
+   "models":{
+      "license_status":{
+         "id":"license_status",
+         "description":"License status information",
+         "properties":{
+            "status":{
+               "type":"string",
+               "description":"License status: no_license, valid, expired, or invalid"
+            },
+            "customer_id":{
+               "type":"string",
+               "description":"Customer identifier from the license"
+            },
+            "message":{
+               "type":"string",
+               "description":"Human-readable status message"
+            }
+         }
+      },
+      "license_usage":{
+         "id":"license_usage",
+         "description":"License usage information",
+         "properties":{
+            "customer_id":{
+               "type":"string",
+               "description":"Customer identifier from the license"
+            },
+            "expiry_timestamp":{
+               "type":"long",
+               "description":"Unix timestamp when license expires (0 = never)"
+            },
+            "max_vcpus":{
+               "type":"int",
+               "description":"Maximum allowed vCPUs"
+            },
+            "max_storage_bytes":{
+               "type":"long",
+               "description":"Maximum allowed storage in bytes"
+            },
+            "current_vcpus":{
+               "type":"int",
+               "description":"Current vCPU count"
+            },
+            "current_storage_bytes":{
+               "type":"long",
+               "description":"Current storage usage in bytes"
+            },
+            "vcpu_limit_exceeded":{
+               "type":"boolean",
+               "description":"True if current vCPU count exceeds the limit"
+            },
+            "storage_limit_exceeded":{
+               "type":"boolean",
+               "description":"True if current storage exceeds the limit"
+            }
+         }
+      }
+   }
+}
+

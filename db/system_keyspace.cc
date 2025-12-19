@@ -1435,6 +1435,41 @@ schema_ptr system_keyspace::client_routes() {
     return schema;
 }
 
+// License table stores signed license data for enterprise customers.
+// The license is verified using Ed25519 signatures to prevent tampering.
+// Only accessible via REST API, not CQL, to prevent direct modification.
+//
+// Grace period tracking: When a license expires, grace_period_start_timestamp is set
+// to the first time we detected the expiry. This timestamp is included in an extended
+// signature to prevent tampering. Users get 7 days grace period before writes are blocked.
+schema_ptr system_keyspace::licenses() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, LICENSES);
+        return schema_builder(NAME, LICENSES, std::make_optional(id))
+                // Single row table - partition key is always "current"
+                .with_column("key", utf8_type, column_kind::partition_key)
+                // License data string (format: SCYLLA_LICENSE:v1:customer:expiry:vcpus:storage)
+                .with_column("license_data", utf8_type)
+                // Ed25519 signature (hex-encoded, 128 chars)
+                .with_column("signature", utf8_type)
+                // Timestamp when license was uploaded
+                .with_column("uploaded_at", timestamp_type)
+                // Customer ID (extracted from license_data for easy querying)
+                .with_column("customer_id", utf8_type)
+                // Expiration timestamp (extracted from license_data)
+                .with_column("expiry_timestamp", long_type)
+                // Grace period start timestamp (set when license first detected as expired)
+                // This is server-side generated and protected by grace_period_signature
+                .with_column("grace_period_start_timestamp", long_type)
+                // Signature of (license_data + grace_period_start_timestamp)
+                // This prevents users from tampering with the grace period start time
+                .with_column("grace_period_signature", utf8_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 future<system_keyspace::local_info> system_keyspace::load_local_info() {
     auto msg = co_await execute_cql(format("SELECT host_id, cluster_name, data_center, rack FROM system.{} WHERE key=?", LOCAL), sstring(LOCAL));
 
@@ -2362,7 +2397,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
-                    dicts(), view_building_tasks(), client_routes(), cdc_streams_state(), cdc_streams_history()
+                    dicts(), view_building_tasks(), client_routes(), licenses(), cdc_streams_state(), cdc_streams_history()
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
