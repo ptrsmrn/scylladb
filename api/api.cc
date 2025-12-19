@@ -38,6 +38,7 @@
 #include "gms/gossip_address_map.hh"
 #include "service_levels.hh"
 #include "client_routes.hh"
+#include "license.hh"
 
 logging::logger apilog("api");
 
@@ -69,10 +70,12 @@ future<> set_server_init(http_context& ctx) {
         rb02->register_api_file(r, "swagger20_header");
         rb02->register_api_file(r, "metrics");
         rb02->register_api_file(r, "client_routes");
+        rb02->register_api_file(r, "license");
         rb->register_function(r, "system",
                 "The system related API");
         rb02->add_definitions_file(r, "metrics");
         rb02->add_definitions_file(r, "client_routes");
+        rb02->add_definitions_file(r, "license");
         set_system(ctx, r);
         rb->register_function(r, "error_injection",
             "The error injection API");
@@ -140,6 +143,16 @@ future<> set_server_client_routes(http_context& ctx, sharded<service::client_rou
 
 future<> unset_server_client_routes(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_client_routes(ctx, r); });
+}
+
+future<> set_server_license(http_context& ctx, sharded<service::license_service>& ls) {
+    return ctx.http_server.set_routes([&ctx, &ls] (routes& r) {
+        set_license(ctx, r, ls);
+    });
+}
+
+future<> unset_server_license(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_license(ctx, r); });
 }
 
 future<> set_load_meter(http_context& ctx, service::load_meter& lm) {

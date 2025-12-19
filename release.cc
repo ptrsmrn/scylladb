@@ -18,6 +18,7 @@
 static const char scylla_version_str[] = SCYLLA_VERSION;
 static const char scylla_release_str[] = SCYLLA_RELEASE;
 static const char scylla_build_mode_str[] = SCYLLA_BUILD_MODE_STR;
+static const char scylla_product_str[] = SCYLLA_PRODUCT;
 
 std::string scylla_version()
 {
@@ -27,6 +28,16 @@ std::string scylla_version()
 std::string scylla_build_mode()
 {
     return seastar::format("{}", scylla_build_mode_str);
+}
+
+std::string scylla_product()
+{
+    return scylla_product_str;
+}
+
+bool is_enterprise_build()
+{
+    return std::string_view(scylla_product_str).find("enterprise") != std::string_view::npos;
 }
 
 std::string doc_link(std::string_view url_tail) {
