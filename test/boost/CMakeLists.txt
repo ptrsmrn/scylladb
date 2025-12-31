@@ -344,6 +344,8 @@ add_scylla_test(combined_tests
     index_with_paging_test.cc
     json_cql_query_test.cc
     large_paging_state_test.cc
+    license_compliance_test.cc
+    license_grace_period_test.cc
     loading_cache_test.cc
     memtable_test.cc
     multishard_combining_reader_as_mutation_source_test.cc

@@ -1,0 +1,10 @@
+======================================================================
+NEW ED25519 KEYPAIR GENERATED
+======================================================================
+
+SEED (KEEP THIS SECRET - store securely offline):
+  cbe3befc0055b6f3be344e1c363f1063a116b6e5aa286340e034be082afc21db
+
+PUBLIC KEY (raw bytes):
+  8c58531191bdb29c0e65e3faaab347793c4fdc6314ba956eff42d36df787b6f3
+

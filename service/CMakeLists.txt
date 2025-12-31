@@ -4,6 +4,7 @@ target_sources(service
     broadcast_tables/experimental/lang.cc
     client_state.cc
     client_routes.cc
+    license_service.cc
     mapreduce_service.cc
     migration_manager.cc
     misc_services.cc

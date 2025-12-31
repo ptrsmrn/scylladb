@@ -24,6 +24,7 @@
 #include <seastar/core/signal.hh>
 #include <seastar/core/timer.hh>
 #include "service/client_routes.hh"
+#include "service/license_service.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "db/view/view_building_state.hh"
 #include "tasks/task_manager.hh"
@@ -100,6 +101,7 @@
 #include "cdc/generation_service.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/storage_proxy.hh"
+#include "license_compliance.hh"
 #include "service/mapreduce_service.hh"
 #include "alternator/controller.hh"
 #include "alternator/ttl.hh"
@@ -1803,6 +1805,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 client_routes.stop().get();
             });
 
+            checkpoint(stop_signal, "initializing license service");
+            static sharded<service::license_service> license_service;
+            license_service.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(group0_client), std::ref(qp), std::ref(db)).get();
+            auto stop_license_service = defer_verbose_shutdown("license_service", [&] {
+                license_service.stop().get();
+            });
+
             checkpoint(stop_signal, "initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -2204,6 +2213,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_client_routes(ctx).get();
             });
 
+            api::set_server_license(ctx, license_service).get();
+            auto stop_license_api = defer_verbose_shutdown("license API", [&ctx] {
+                api::unset_server_license(ctx).get();
+            });
+
             checkpoint(stop_signal, "join cluster");
             // Allow abort during join_cluster since bootstrap or replace
             // can take a long time.
@@ -2556,6 +2570,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             if (bool enabled = cfg->alternator_port() || cfg->alternator_https_port()) {
                 ss.local().register_protocol_server(alternator_ctl, enabled).get();
             }
+
+            // Start license compliance monitoring (runs periodically in background)
+            // Uses default interval of 1 hour to minimize performance impact
+            // The license file is expected in the first data directory
+            std::filesystem::path license_file_path = std::filesystem::path(cfg->data_file_directories()[0]) / license::default_license_filename;
+            license::compliance_monitor::config license_cfg;
+            license_cfg.license_file_path = license_file_path;
+            license::compliance_monitor license_monitor(stop_signal.as_local_abort_source(), db, license_cfg);
+            license_monitor.start().get();
+            auto stop_license_monitor = defer_verbose_shutdown("license compliance monitor", [&license_monitor] {
+                license_monitor.stop().get();
+            });
 
             stop_signal.ready();
             supervisor::notify("serving");
