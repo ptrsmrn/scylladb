@@ -1,0 +1,5 @@
+license is checked periodically, not to degrade the cluster's performance, but if limits are exceeded, we may implement a mechanism to degrade the performance, e.g. by executing complex internal queries and thus increasing the load and latency
+license is checked only on one node in a cluster. This may be a raft leader, for example
+licensing is implemented using asymmetric encryption: scylla-server is going to have an obscured salted public key, while customers can get different private keys
+tests need to thoroughly verify all the cases, especially ensure that the licensing module doesn't degrade the performance for licensed cases
+
