@@ -534,5 +534,17 @@ seastar::future<> license_service::with_retry(Func&& func) {
     }
 }
 
+// Force an immediate compliance check - triggers grace period if license is expired
+seastar::future<> license_service::force_compliance_check() {
+    lslog.info("Force compliance check requested");
+
+    // Invoke check on shard 0 (where license operations happen)
+    co_await container().invoke_on(0, [] (license_service& ls) {
+        return ls.check_and_update_grace_period();
+    });
+
+    lslog.info("Force compliance check completed");
+}
+
 } // namespace service
 

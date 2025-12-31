@@ -81,6 +81,25 @@ rest_delete_license(http_context& ctx, sharded<service::license_service>& ls, st
     co_return json::json_void();
 }
 
+static future<json::json_return_type>
+rest_force_license_check(http_context& ctx, sharded<service::license_service>& ls, std::unique_ptr<http::request> req) {
+    co_await ls.local().force_compliance_check();
+
+    // Return current status after the check
+    auto status = co_await ls.local().get_status();
+
+    license_json::license_status result;
+    result.status = service::license_service::status_to_string(status.status);
+    if (status.customer_id) {
+        result.customer_id = *status.customer_id;
+    }
+    if (status.message) {
+        result.message = *status.message;
+    }
+
+    co_return result;
+}
+
 void set_license(http_context& ctx, routes& r, sharded<service::license_service>& ls) {
     license_json::get_license_status.set(r, [&ctx, &ls] (std::unique_ptr<http::request> req) {
         return rest_get_license_status(ctx, ls, std::move(req));
@@ -96,6 +115,10 @@ void set_license(http_context& ctx, routes& r, sharded<service::license_service>
 
     license_json::delete_license.set(r, [&ctx, &ls] (std::unique_ptr<http::request> req) {
         return rest_delete_license(ctx, ls, std::move(req));
+    });
+
+    license_json::force_license_check.set(r, [&ctx, &ls] (std::unique_ptr<http::request> req) {
+        return rest_force_license_check(ctx, ls, std::move(req));
     });
 }
 

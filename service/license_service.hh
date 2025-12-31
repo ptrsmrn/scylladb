@@ -126,6 +126,11 @@ public:
         co_return true;
     }
 
+    // Force an immediate license compliance check
+    // This will trigger grace period if license is expired
+    // Useful for testing and immediate verification
+    seastar::future<> force_compliance_check();
+
 private:
     seastar::future<> upload_license_inner(const license_entry& entry);
     seastar::future<> delete_license_inner();

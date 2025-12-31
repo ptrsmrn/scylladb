@@ -52,18 +52,28 @@ constexpr uint8_t derive_byte(size_t pos, uint64_t salt) {
     return static_cast<uint8_t>(v & 0xFF);
 }
 
-// The obfuscated public key base values.
-// To generate these for a new keypair:
-// 1. Generate a keypair with generate_keypair()
-// 2. Call print_keypair_for_embedding() to get these values
-// 3. Replace these constants
+// ============================================================================
+// PRODUCTION KEYPAIR - DO NOT MODIFY AFTER FIRST RELEASE!
+// ============================================================================
+// Keypair Information:
+//   Seed (KEEP SECRET): cbe3befc0055b6f3be344e1c363f1063a116b6e5aa286340e034be082afc21db
+//   Public Key: 8c58531191bdb29c0e65e3faaab347793c4fdc6314ba956eff42d36df787b6f3
+//   Generated: 2025-12-31
 //
-// Current values are for a TEST keypair - replace for production!
+// ⚠️  CRITICAL WARNING:
+//   - Changing these values will INVALIDATE ALL EXISTING CUSTOMER LICENSES!
+//   - The seed MUST be backed up securely in multiple offline locations
+//   - Only authorized personnel should have access to the seed
+//   - Use the seed to generate all customer licenses via tools/scylla-license-gen.py
+//
+// The public key is obfuscated (XORed with derived bytes) to make it harder
+// to locate and modify in the binary. The obfuscation does NOT provide security
+// against determined attackers, but adds a small hurdle.
 constexpr std::array<uint8_t, 32> obfuscated_pubkey_base = {
-    0x8a, 0x3d, 0x7e, 0x21, 0xf4, 0x56, 0x9b, 0xc8,
-    0x12, 0xe7, 0x4a, 0xbd, 0x03, 0x68, 0xdf, 0x91,
-    0x5c, 0xa2, 0x37, 0xe9, 0x84, 0x1b, 0x6f, 0xc0,
-    0xd5, 0x49, 0x8e, 0x22, 0xb7, 0x60, 0xf3, 0x0c
+    0x90, 0x7b, 0x6c, 0x73, 0x33, 0x1c, 0xd1, 0x23,
+    0xce, 0xc9, 0x68, 0x55, 0x9d, 0x1c, 0x31, 0x53,
+    0xc8, 0xea, 0xe9, 0xac, 0x3a, 0xc7, 0x8d, 0x9a,
+    0xe0, 0x73, 0x57, 0x7b, 0x43, 0x4c, 0x20, 0xb2
 };
 
 constexpr uint64_t pubkey_salt = 0x5C411A2024DB01F5ULL;
@@ -372,17 +382,17 @@ std::optional<license_data> verify_license_file(const seastar::sstring& content)
         return std::nullopt;
     }
 
-    // Check expiration
+    // Note: We allow expired licenses to be uploaded - they'll enter grace period
+    // The grace period mechanism in license_service will handle blocking writes after 7 days
     if (data->is_expired()) {
-        lclog.warn("License for customer '{}' has expired", data->customer_id);
-        return std::nullopt;
+        lclog.warn("License for customer '{}' has expired (will enter grace period)", data->customer_id);
+    } else {
+        lclog.info("Valid license detected for customer '{}' (vcpus: {}, storage: {} TB)",
+                   data->customer_id,
+                   data->is_unlimited_vcpus() ? "unlimited" : std::to_string(data->max_vcpus),
+                   data->is_unlimited_storage() ? "unlimited" :
+                       std::to_string(data->max_storage_bytes / (int64_t(1024) * 1024 * 1024 * 1024)));
     }
-
-    lclog.info("Valid license detected for customer '{}' (vcpus: {}, storage: {} TB)",
-               data->customer_id,
-               data->is_unlimited_vcpus() ? "unlimited" : std::to_string(data->max_vcpus),
-               data->is_unlimited_storage() ? "unlimited" :
-                   std::to_string(data->max_storage_bytes / (int64_t(1024) * 1024 * 1024 * 1024)));
 
     return data;
 }

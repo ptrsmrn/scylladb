@@ -139,6 +139,7 @@ namespace {
                 system_keyspace::DICTS,
                 system_keyspace::VIEW_BUILDING_TASKS,
                 system_keyspace::CLIENT_ROUTES,
+                system_keyspace::LICENSES,
             };
             if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
                 props.is_group0_table = true;

@@ -72,6 +72,21 @@
                "parameters":[]
             }
          ]
+      },
+      {
+         "path":"/v2/license/check",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Force license compliance check (triggers grace period if expired)",
+               "type":"license_status",
+               "nickname":"force_license_check",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
       }
    ],
    "models":{
