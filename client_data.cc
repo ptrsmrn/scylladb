@@ -7,22 +7,17 @@
  */
 
 #include "client_data.hh"
-#include <stdexcept>
+
+#include <ranges>
+#include <cctype>
+#include <magic_enum/magic_enum.hpp>
 
 sstring to_string(client_type ct) {
-    switch (ct) {
-        case client_type::cql: return "cql";
-        case client_type::thrift: return "thrift";
-        case client_type::alternator: return "alternator";
-    }
-    throw std::runtime_error("Invalid client_type");
+    return sstring(magic_enum::enum_name(ct));
 }
 
 sstring to_string(client_connection_stage ccs) {
-    switch (ccs) {
-        case client_connection_stage::established: return "ESTABLISHED";
-        case client_connection_stage::authenticating: return "AUTHENTICATING";
-        case client_connection_stage::ready: return "READY";
-    }
-    throw std::runtime_error("Invalid client_connection_stage");
+    return std::views::all(magic_enum::enum_name(ccs))
+         | std::views::transform([](unsigned char c) { return std::toupper(c); })
+         | std::ranges::to<sstring>();
 }
