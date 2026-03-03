@@ -3027,6 +3027,7 @@ def create_build_system(args):
             configure_seastar(outdir, mode, mode_config, compiler_cache)
             configure_abseil(outdir, mode, mode_config, compiler_cache)
         user_cflags += ' -isystem abseil'
+        user_cflags += ' -isystem magic_enum/include'
 
     for mode, mode_config in build_modes.items():
         mode_config.update(query_seastar_flags(f'{outdir}/{mode}/seastar/seastar.pc',

@@ -127,6 +127,11 @@ target_include_directories(absl-headers SYSTEM INTERFACE
     "${PROJECT_SOURCE_DIR}/abseil")
 add_library(absl::headers ALIAS absl-headers)
 
+add_library(magic-enum-headers INTERFACE)
+target_include_directories(magic-enum-headers SYSTEM INTERFACE
+    "${PROJECT_SOURCE_DIR}/magic_enum/include")
+add_library(magic_enum::magic_enum ALIAS magic-enum-headers)
+
 # Exclude absl::strerror from the default "all" target since it's not
 # used in Scylla build and, moreover, makes use of deprecated glibc APIs,
 # such as sys_nerr, which are not exposed from "stdio.h" since glibc 2.32,

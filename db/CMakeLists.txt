@@ -55,6 +55,7 @@ target_link_libraries(db
     Seastar::seastar
     xxHash::xxhash
     absl::headers
+    magic_enum::magic_enum
   PRIVATE
     data_dictionary
     cql3)
