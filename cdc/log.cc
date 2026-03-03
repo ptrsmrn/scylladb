@@ -12,6 +12,8 @@
 #include <boost/range/irange.hpp>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>
+#include <magic_enum/magic_enum.hpp>
+#include <magic_enum/magic_enum_utility.hpp>
 
 #include "cdc/log.hh"
 #include "cdc/generation.hh"
@@ -85,23 +87,14 @@ static constexpr auto cdc_group_name = "cdc";
 
 void cdc::stats::parts_touched_stats::register_metrics(seastar::metrics::metric_groups& metrics, std::string_view suffix) {
     namespace sm = seastar::metrics;
-    auto register_part = [&] (part_type part, sstring part_name) {
+    auto to_lower = [] (auto const& s) { return std::views::all(s) | std::views::transform([](unsigned char c) { return std::tolower(c); }) | std::ranges::to<sstring>();};
+    magic_enum::enum_for_each<part_type>([&] (part_type part) {
         metrics.add_group(cdc_group_name, {
-                sm::make_total_operations(seastar::format("operations_on_{}_performed_{}", part_name, suffix), count[(size_t)part],
-                        sm::description(seastar::format("number of {} CDC operations that processed a {}", suffix, part_name)),
+                sm::make_total_operations(seastar::format("operations_on_{}_performed_{}", to_lower(magic_enum::enum_name(part)), suffix), count[(size_t)part],
+                        sm::description(seastar::format("number of {} CDC operations that processed a {}", suffix, to_lower(magic_enum::enum_name(part)))),
                         {cdc_label}).set_skip_when_empty()
             });
-    };
-
-    register_part(part_type::STATIC_ROW, "static_row");
-    register_part(part_type::CLUSTERING_ROW, "clustering_row");
-    register_part(part_type::MAP, "map");
-    register_part(part_type::SET, "set");
-    register_part(part_type::LIST, "list");
-    register_part(part_type::UDT, "udt");
-    register_part(part_type::RANGE_TOMBSTONE, "range_tombstone");
-    register_part(part_type::PARTITION_DELETE, "partition_delete");
-    register_part(part_type::ROW_DELETE, "row_delete");
+    });
 }
 
 cdc::stats::stats() {
