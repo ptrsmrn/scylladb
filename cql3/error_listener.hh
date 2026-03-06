@@ -10,36 +10,27 @@
 
 #pragma once
 
-#include "seastarx.hh"
+#include <string>
 #include <seastar/core/sstring.hh>
-#include <antlr3.hpp>
 
 namespace cql3 {
 
 /**
- * Listener used to collect the syntax errors emitted by the Lexer and Parser.
+ * Listener used to collect the syntax errors emitted by the CQL lexer and parser.
+ *
+ * This is a simple non-templated interface used by both the lexer and parser members
+ * injected via the ANTLR4 grammar @lexer::members / @parser::members sections.
  */
-template<typename RecognizerType, typename ExceptionBaseType>
 class error_listener {
 public:
     virtual ~error_listener() = default;
 
     /**
-     * Invoked when a syntax error occurs.
-     *
-     * @param recognizer the parser or lexer that emitted the error
-     * @param tokenNames the token names
-     * @param e the exception
-     */
-    virtual void syntax_error(RecognizerType& recognizer, ANTLR_UINT8** token_names, ExceptionBaseType* ex) = 0;
-
-    /**
      * Invoked when a syntax error with a specified message occurs.
      *
-     * @param recognizer the parser or lexer that emitted the error
-     * @param errorMsg the error message
+     * @param error_msg the error message (already formatted with line/column info)
      */
-    virtual void syntax_error(RecognizerType& recognizer, const sstring& error_msg) = 0;
+    virtual void syntax_error(const sstring& error_msg) = 0;
 };
 
 }

@@ -507,7 +507,10 @@ sstring maybe_quote(const std::string_view identifier) {
         // So we can use any of them, for example cident.
         try {
             // In general it's not a good idea to use the default dialect, but for parsing an identifier, it's okay.
-            cql3::util::do_with_parser(identifier, dialect{}, std::mem_fn(&cql3_parser::CqlParser::cident));
+            cql3::util::do_with_parser(identifier, dialect{}, [](cql3_parser::CqlParser& p) {
+                p.cident();
+                return 0;
+            });
             return sstring{identifier};
         } catch(exceptions::syntax_exception&) {
             // This alphanumeric string is not a valid identifier, so fall

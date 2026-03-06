@@ -173,11 +173,8 @@ BOOST_AUTO_TEST_CASE(test_magnitude_and_precision) {
 
 // parsed expression cache tests:
 
-// ANTLR3 leaks memory when it tries to recover from missing token.
-// - it creates a "fake" token, if it allows to continue parsing.
-// Leak was reported by ASAN, when running this test in debug mode - 
-// the test passed but the leak is discovered when the test file exits.
-// Reproduces #25878
+// Test that malformed expressions raise a syntax error without leaking memory.
+// Reproduces #25878 (was an ANTLR3-specific issue; kept as a regression test)
 BOOST_AUTO_TEST_CASE(missing_tokens_memory_leak) {
     BOOST_REQUIRE_THROW(alternator::parse_update_expression("SET a :v"), alternator::expressions_syntax_error); // missing '='
     BOOST_REQUIRE_THROW(alternator::parse_update_expression("DELETE a v"), alternator::expressions_syntax_error); // missing ':'

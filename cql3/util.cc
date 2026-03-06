@@ -8,114 +8,41 @@
 #include "util.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "db/config.hh"
-
-#ifdef DEBUG
-
-#include <ucontext.h>
-
-extern "C" {
-void __sanitizer_start_switch_fiber(void** fake_stack_save, const void* stack_bottom, size_t stack_size);
-void __sanitizer_finish_switch_fiber(void* fake_stack_save, const void** stack_bottom_old, size_t* stack_size_old);
-}
-
-#endif
+#include <antlr4-runtime.h>
+#include "cql3/CqlLexer.h"
+#include "cql3/CqlParser.h"
 
 namespace cql3::util {
 
-static void do_with_parser_impl_impl(const std::string_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
-    cql3_parser::CqlLexer::collector_type lexer_error_collector(cql);
-    cql3_parser::CqlParser::collector_type parser_error_collector(cql);
-    cql3_parser::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(cql.begin()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(cql.size()), nullptr};
-    cql3_parser::CqlLexer lexer{&input};
-    lexer.set_error_listener(lexer_error_collector);
-    cql3_parser::CqlParser::TokenStreamType tstream(ANTLR_SIZE_HINT, lexer.get_tokSource());
-    cql3_parser::CqlParser parser{&tstream};
-    parser.set_error_listener(parser_error_collector);
+void do_with_parser_impl(const std::string_view& cql, dialect d, noncopyable_function<void(cql3_parser::CqlParser& parser)> f) {
+    cql3::error_collector ec(cql);
+
+    antlr4::ANTLRInputStream input(cql.data(), cql.size());
+
+    cql3_parser::CqlLexer lexer(&input);
+    lexer.removeErrorListeners();
+    lexer.addErrorListener(&ec);
+    // Wire the grammar-injected set_error_listener so action code can call add_recognition_error()
+    lexer.set_error_listener(ec);
+
+    antlr4::CommonTokenStream tokens(&lexer);
+
+    cql3_parser::CqlParser parser(&tokens);
+    parser.removeErrorListeners();
+    parser.addErrorListener(&ec);
+    parser.set_error_listener(ec);
     parser.set_dialect(d);
+    // Disable parse tree construction: the grammar uses embedded actions to build the ScyllaDB
+    // AST directly during the parse, so the ANTLR4 CST is never used. Disabling it saves
+    // memory for large queries without affecting correctness.
+    parser.setBuildParseTree(false);
+
+    // Use full LL prediction mode to correctly handle all CQL constructs, including
+    // keywords-as-identifiers which require LL's full lookahead.
+    parser.getInterpreter<antlr4::atn::ParserATNSimulator>()->setPredictionMode(antlr4::atn::PredictionMode::LL);
+
     f(parser);
 }
-
-#ifndef DEBUG
-
-void do_with_parser_impl(const std::string_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
-    return do_with_parser_impl_impl(cql, d, std::move(f));
-}
-
-#else
-
-// The CQL parser uses huge amounts of stack space in debug mode,
-// enough to overflow our 128k stacks. The mechanism below runs
-// the parser in a larger stack.
-
-struct thunk_args {
-    // arguments to do_with_parser_impl_impl
-    const std::string_view& cql;
-    dialect d;
-    noncopyable_function<void (cql3_parser::CqlParser&)>&& func;
-    // Exceptions can't be returned from another stack, so store
-    // any thrown exception here
-    std::exception_ptr ex;
-    // Caller's stack
-    ucontext_t caller_stack;
-    // Address Sanitizer needs some extra storage for stack switches.
-    struct {
-        void* fake_stack;
-        const void* stack_bottom;
-        size_t stack_size;
-    } sanitizer_state;
-};
-
-// Translate from makecontext(3)'s strange calling convention
-// to do_with_parser_impl_impl().
-static void thunk(int p1, int p2) {
-    auto p = uint32_t(p1) | (uint64_t(uint32_t(p2)) << 32);
-    auto args = reinterpret_cast<thunk_args*>(p);
-    auto& san = args->sanitizer_state;
-    // Complete stack switch started in do_with_parser_impl()
-    __sanitizer_finish_switch_fiber(nullptr, &san.stack_bottom, &san.stack_size);
-    try {
-        do_with_parser_impl_impl(args->cql, args->d, std::move(args->func));
-    } catch (...) {
-        args->ex = std::current_exception();
-    }
-    // Switch back to original stack
-    __sanitizer_start_switch_fiber(nullptr, san.stack_bottom, san.stack_size);
-    setcontext(&args->caller_stack);
-};
-
-void do_with_parser_impl(const std::string_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
-    static constexpr size_t stack_size = 1 << 20;
-    static thread_local std::unique_ptr<char[]> stack = std::make_unique<char[]>(stack_size);
-    thunk_args args{
-        .cql = cql,
-        .d = d,
-        .func = std::move(f),
-    };
-    ucontext_t uc;
-    auto r = getcontext(&uc);
-    SCYLLA_ASSERT(r == 0);
-    if (stack.get() <= (char*)&uc && (char*)&uc < stack.get() + stack_size) {
-        // We are already running on the large stack, so just call the
-        // parser directly.
-        return do_with_parser_impl_impl(cql, d, std::move(f));
-    }
-    uc.uc_stack.ss_sp = stack.get();
-    uc.uc_stack.ss_size = stack_size;
-    uc.uc_link = nullptr;
-    auto q = reinterpret_cast<uint64_t>(reinterpret_cast<uintptr_t>(&args));
-    makecontext(&uc, reinterpret_cast<void (*)()>(thunk), 2, int(q), int(q >> 32));
-    auto& san = args.sanitizer_state;
-    // Tell Address Sanitizer we are switching to another stack
-    __sanitizer_start_switch_fiber(&san.fake_stack, stack.get(), stack_size);
-    swapcontext(&args.caller_stack, &uc);
-    // Completes stack switch started in thunk()
-    __sanitizer_finish_switch_fiber(san.fake_stack, nullptr, 0);
-    if (args.ex) {
-        std::rethrow_exception(std::move(args.ex));
-    }
-}
-
-#endif
 
 void validate_timestamp(const db::config& config, const query_options& options, const std::unique_ptr<attributes>& attrs) {
     if (attrs->is_timestamp_set() && config.restrict_future_timestamp()) {
@@ -142,7 +69,7 @@ sstring relations_to_where_clause(const expr::expression& e) {
 }
 
 expr::expression where_clause_to_relations(const std::string_view& where_clause, dialect d) {
-    return do_with_parser(where_clause, d, std::mem_fn(&cql3_parser::CqlParser::whereClause));
+    return do_with_parser(where_clause, d, std::mem_fn(&cql3_parser::CqlParser::whereClause_expr));
 }
 
 sstring rename_columns_in_where_clause(const std::string_view& where_clause, std::vector<std::pair<::shared_ptr<column_identifier>, ::shared_ptr<column_identifier>>> renames, dialect d) {

@@ -49,7 +49,9 @@ debian_base_packages=(
     libsnappy-dev
     libjsoncpp-dev
     rapidjson-dev
-    scylla-antlr35-c++-dev
+    libantlr4-runtime-dev
+    antlr4
+    default-jre-headless
     git
     pigz
     libunistring-dev
@@ -80,8 +82,9 @@ fedora_packages=(
     gdb
     lua-devel
     yaml-cpp-devel
-    antlr3-tool
-    antlr3-C++-devel
+    antlr4
+    antlr4-cpp-runtime-devel
+    java-11-openjdk-headless
     jsoncpp-devel
     rapidjson-devel
     snappy-devel
@@ -202,8 +205,9 @@ pip_symlinks=(
 centos_packages=(
     gdb
     yaml-cpp-devel
-    scylla-antlr35-tool
-    scylla-antlr35-C++-devel
+    antlr4-tool
+    antlr4-cpp-runtime-devel
+    java-11-openjdk-headless
     jsoncpp-devel snappy-devel
     rapidjson-devel
     scylla-boost163-static
@@ -223,7 +227,7 @@ centos_packages=(
 # 3) aur installations require having sudo and being
 #    a sudoer. makepkg does not work otherwise.
 #
-# aur: antlr3, antlr3-cpp-headers-git
+# aur: antlr4, antlr4-runtime
 arch_packages=(
     gdb
     base-devel
@@ -369,13 +373,13 @@ umask 0022
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     apt-get -y install "${debian_base_packages[@]}"
     if [ "$VERSION_ID" = "8" ]; then
-        apt-get -y install libsystemd-dev scylla-antlr35 libyaml-cpp-dev
+        apt-get -y install libsystemd-dev libantlr4-runtime-dev antlr4 default-jre-headless libyaml-cpp-dev
     elif [ "$VERSION_ID" = "14.04" ]; then
-        apt-get -y install scylla-antlr35 libyaml-cpp-dev
+        apt-get -y install libantlr4-runtime-dev antlr4 default-jre-headless libyaml-cpp-dev
     elif [ "$VERSION_ID" = "9" ]; then
-        apt-get -y install libsystemd-dev antlr3 scylla-libyaml-cpp05-dev
+        apt-get -y install libsystemd-dev libantlr4-runtime-dev antlr4 default-jre-headless scylla-libyaml-cpp05-dev
     else
-        apt-get -y install libsystemd-dev antlr3 libyaml-cpp-dev
+        apt-get -y install libsystemd-dev libantlr4-runtime-dev antlr4 default-jre-headless libyaml-cpp-dev
     fi
     apt-get -y install libssl-dev
 
@@ -414,7 +418,7 @@ elif [ "$ID" = "fedora" ]; then
 elif [ "$ID" = "centos" ]; then
     centos_packages+=(openssl-devel)
     dnf install -y "${centos_packages[@]}"
-    echo -e "Configure example:\n\tpython3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64 --cflags=-I/opt/scylladb/include --with-antlr3=/opt/scylladb/bin/antlr3"
+    echo -e "Configure example:\n\tpython3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64 --cflags=-I/opt/scylladb/include"
 elif [ "$ID" == "arch" ]; then
     # main
     if [ "$EUID" -eq "0" ]; then
@@ -424,29 +428,29 @@ elif [ "$ID" == "arch" ]; then
     fi
 
     # aur
-    if [ ! -x /usr/bin/antlr3 ]; then
-        echo "Installing aur/antlr3..."
+    if [ ! -x /usr/bin/antlr4 ]; then
+        echo "Installing aur/antlr4..."
         if (( EUID == 0 )); then
             echo "You now ran $0 as root. This can only update dependencies with pacman. Please run again it as non-root to complete the AUR part of the installation." 1>&2
             exit 1
         fi
         TEMP=$(mktemp -d)
         pushd "$TEMP" > /dev/null || exit 1
-        git clone --depth 1 https://aur.archlinux.org/antlr3.git
-        cd antlr3 || exit 1
+        git clone --depth 1 https://aur.archlinux.org/antlr4.git
+        cd antlr4 || exit 1
         makepkg -si
         popd > /dev/null || exit 1
     fi
-    if [ ! -f /usr/include/antlr3.hpp ]; then
-        echo "Installing aur/antlr3-cpp-headers-git..."
+    if [ ! -f /usr/include/antlr4-runtime/antlr4-runtime.h ]; then
+        echo "Installing aur/antlr4-runtime..."
         if (( EUID == 0 )); then
             echo "You now ran $0 as root. This can only update dependencies with pacman. Please run again it as non-root to complete the AUR part of the installation." 1>&2
             exit 1
         fi
         TEMP=$(mktemp -d)
         pushd "$TEMP" > /dev/null || exit 1
-        git clone --depth 1 https://aur.archlinux.org/antlr3-cpp-headers-git.git
-        cd antlr3-cpp-headers-git || exit 1
+        git clone --depth 1 https://aur.archlinux.org/antlr4-runtime.git
+        cd antlr4-runtime || exit 1
         makepkg -si
         popd > /dev/null || exit 1
     fi

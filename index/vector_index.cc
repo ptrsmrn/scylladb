@@ -321,7 +321,7 @@ bool vector_index::has_vector_index(const schema& s) {
 bool vector_index::has_vector_index_on_column(const schema& s, const sstring& target_name) {
     for (const auto& index : s.indices()) {
         auto class_it = index.options().find(db::index::secondary_index::custom_class_option_name);
-        auto target_it = index.options().find(cql3_parser::index_target::target_option_name);
+        auto target_it = index.options().find(cql3::statements::index_target::target_option_name);
         if (class_it != index.options().end() && target_it != index.options().end()) {
             auto custom_class = secondary_index_manager::get_custom_class_factory(class_it->second);
             return custom_class && dynamic_cast<vector_index*>((*custom_class)().get()) && target_it->second == target_name;

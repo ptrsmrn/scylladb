@@ -288,6 +288,7 @@ bool clustering_prefix_matches(data_dictionary::database db, const schema& base,
     }
     auto selection = cql3::selection::selection::for_columns(base.shared_from_this(), ck_columns);
     uint64_t zero = 0;
+    (void)zero;
     auto dummy_options = cql3::query_options({ });
     // FIXME: pass nullptrs for some of  these dummies
     return cql3::expr::is_satisfied_by(
@@ -2555,6 +2556,7 @@ static future<> announce_with_raft(
 
         auto guard = co_await group0_client.start_operation(as);
         auto timestamp = guard.write_timestamp();
+        (void)timestamp;
 
         auto mut = co_await mutation_gen(guard.write_timestamp());
         utils::chunked_vector<canonical_mutation> cmuts;
@@ -2905,6 +2907,7 @@ future<> view_builder::generate_mutations_on_node_left(replica::database& db, db
     }
 
     auto& qp = sys_ks.query_processor();
+    (void)qp;
     muts.reserve(muts.size() + db.get_views().size());
     // We expect the table to have a row for each existing view, so generate delete mutations for all views.
     for (auto& view : db.get_views()) {

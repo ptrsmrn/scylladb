@@ -6,7 +6,7 @@
 # Tests for batch operations
 #############################################################################
 from cassandra import InvalidRequest
-from cassandra.cluster import NoHostAvailable
+from cassandra.protocol import SyntaxException
 from .util import new_test_table
 from .rest_api import scylla_inject_error
 
@@ -71,6 +71,8 @@ def test_error_is_raised_for_batch_size_above_threshold(cql, table1):
 def test_batch_with_error(cql, table1):
     injection_key = 'query_processor-parse_statement-test_failure'
     with scylla_inject_error(cql, injection_key, one_shot=False):
-        # exceptions::exception_code::SERVER_ERROR, it gets converted to NoHostAvailable by the driver
-        with pytest.raises(NoHostAvailable, match="Value too large"):
+        # The parse error is now returned as a proper SyntaxException (code=2000)
+        # because query_processor truncates the query in the error message to avoid
+        # overflowing the CQL wire protocol's uint16_t string length limit.
+        with pytest.raises(SyntaxException, match="query_processor-parse_statement-test_failure"):
             cql.execute(generate_big_batch(table1, 100) + injection_key)

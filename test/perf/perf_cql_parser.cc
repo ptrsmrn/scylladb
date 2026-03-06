@@ -9,8 +9,10 @@
 
 #include "test/perf/perf.hh"
 
+#include <antlr4-runtime.h>
 #include "cql3/error_collector.hh"
-#include "cql3/CqlParser.hpp"
+#include "cql3/CqlLexer.h"
+#include "cql3/CqlParser.h"
 
 using namespace cql3;
 
@@ -20,14 +22,22 @@ int main(int argc, char* argv[]) {
     std::cout << "Timing CQL statement parsing...\n";
 
     time_it([&] {
-        cql3_parser::CqlLexer::collector_type lexer_error_collector(query);
-        cql3_parser::CqlParser::collector_type parser_error_collector(query);
-        cql3_parser::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(query.data()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(query.size()), nullptr};
-        cql3_parser::CqlLexer lexer{&input};
-        lexer.set_error_listener(lexer_error_collector);
-        cql3_parser::CqlParser::TokenStreamType tstream(ANTLR_SIZE_HINT, lexer.get_tokSource());
-        cql3_parser::CqlParser parser{&tstream};
-        parser.set_error_listener(parser_error_collector);
+        cql3::error_collector ec(query);
+
+        antlr4::ANTLRInputStream input(query.data(), query.size());
+
+        cql3_parser::CqlLexer lexer(&input);
+        lexer.removeErrorListeners();
+        lexer.addErrorListener(&ec);
+        lexer.set_error_listener(ec);
+
+        antlr4::CommonTokenStream tokens(&lexer);
+
+        cql3_parser::CqlParser parser(&tokens);
+        parser.removeErrorListeners();
+        parser.addErrorListener(&ec);
+        parser.set_error_listener(ec);
+        parser.set_dialect(cql3::dialect{});
         parser.query();
     });
 }

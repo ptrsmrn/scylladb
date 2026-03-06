@@ -225,6 +225,16 @@ class Antlr3Grammar(Source):
                  for ext in ['Lexer.cpp', 'Lexer.hpp', 'Parser.cpp', 'Parser.hpp']]
         return [os.path.join(gen_dir, file) for file in files]
 
+class Antlr4Grammar(Source):
+    def __init__(self, source):
+        Source.__init__(self, source, '.h', '.cpp')
+
+    def generated(self, gen_dir):
+        basename = os.path.splitext(self.source)[0]
+        files = [basename + ext
+                 for ext in ['Lexer.cpp', 'Lexer.h', 'Parser.cpp', 'Parser.h']]
+        return [os.path.join(gen_dir, file) for file in files]
+
 class Json2Code(Source):
     def __init__(self, source):
         Source.__init__(self, source, '.hh', '.cc')
@@ -824,6 +834,21 @@ arg_parser.add_argument('--enable-seastar-debug-allocations', dest='seastar_debu
                         help='enable seastar debug allocations')
 arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', default="antlr3",
                         help='path to antlr3 executable')
+arg_parser.add_argument('--with-antlr4-jar', dest='antlr4_jar', action='store',
+                        default=next((p for p in [
+                            os.path.join(os.path.dirname(__file__), 'tools/antlr4.jar'),
+                            '/usr/share/java/antlr4-tool.jar',
+                            '/usr/share/java/antlr4.jar',
+                            '/usr/share/antlr4/antlr4-tool.jar',
+                            '/usr/local/share/java/antlr4-tool.jar',
+                        ] if os.path.exists(p)), 'antlr4-tool.jar'),
+                        help='path to ANTLR4 tool jar (antlr4-tool.jar or antlr-4.x-complete.jar)')
+arg_parser.add_argument('--with-antlr4-include', dest='antlr4_include', action='store',
+                        default=next((p for p in [
+                            '/usr/include/antlr4-runtime',
+                            '/usr/local/include/antlr4-runtime',
+                        ] if os.path.exists(os.path.join(p, 'antlr4-runtime.h'))), None),
+                        help='path to ANTLR4 runtime include directory (containing antlr4-runtime.h)')
 arg_parser.add_argument('--with-ragel', dest='ragel_exec', action='store', default='ragel',
         help='path to ragel executable')
 add_tristate(arg_parser, name='stack-guards', dest='stack_guards', help='Use stack guards')
@@ -1371,7 +1396,7 @@ scylla_core = (['message/messaging_service.cc',
                 'vector_search/clients.cc',
                 'vector_search/filter.cc',
                 'vector_search/truststore.cc'
-                ] + [Antlr3Grammar('cql3/Cql.g')] \
+                ] + [Antlr4Grammar('cql3/Cql.g4')] \
                   + scylla_raft_core
                )
 
@@ -2275,9 +2300,13 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc -licui18n'),
                  '-lxxhash',
                  '-ldeflate',
+                 '-lantlr4-runtime',
                 ])
 
 user_cflags += " " + pkg_config('p11-kit-1', '--cflags')
+
+if args.antlr4_include:
+    user_cflags += f' -I{args.antlr4_include}'
 
 if not args.staticboost:
     user_cflags += ' -DBOOST_ALL_DYN_LINK'
@@ -2550,6 +2579,11 @@ def write_build_file(f,
                             s/exceptions::syntax_exception e/exceptions::syntax_exception\\& e/' $
                         $builddir/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
+            rule antlr4.{mode}
+                command = mkdir -p $builddir/{mode}/gen/cql3 $
+                     && java -jar {antlr4_jar} -Dlanguage=Cpp -no-listener -visitor -package cql3_parser -Xexact-output-dir -o $builddir/{mode}/gen/cql3 $in $
+                     && python3 tools/fix_antlr4_generated.py $builddir/{mode}/gen/cql3/CqlParser.h $builddir/{mode}/gen/cql3/CqlParser.cpp
+                description = ANTLR4 $in
             rule checkhh.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags --include $in -c -o $out $builddir/{mode}/gen/empty.cc -USCYLLA_USE_PRECOMPILED_HEADER
               description = CHECKHH $in
@@ -2563,7 +2597,7 @@ def write_build_file(f,
               command = CARGO_BUILD_DEP_INFO_BASEDIR='.' {rustc_wrapper}cargo build --locked --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
               description = RUST_LIB $out
-            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
+            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, antlr4_jar=args.antlr4_jar, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
         f.write(
             'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
@@ -2582,6 +2616,7 @@ def write_build_file(f,
         serializers = {}
         ragels = {}
         antlr3_grammars = set()
+        antlr4_grammars = set()
         rust_headers = {}
 
         # We want LTO, but with the regular LTO, clang generates special LLVM IR files instead of
@@ -2608,6 +2643,8 @@ def write_build_file(f,
             has_rust = False
             for dep in deps[binary]:
                 if isinstance(dep, Antlr3Grammar):
+                    objs += dep.objects(f'$builddir/{mode}/gen')
+                if isinstance(dep, Antlr4Grammar):
                     objs += dep.objects(f'$builddir/{mode}/gen')
                 if isinstance(dep, Json2Code):
                     objs += dep.objects(f'$builddir/{mode}/gen')
@@ -2687,6 +2724,8 @@ def write_build_file(f,
                     ragels[hh] = src
                 elif src.endswith('.g'):
                     antlr3_grammars.add(src)
+                elif src.endswith('.g4'):
+                    antlr4_grammars.add(src)
                 elif src.endswith('.rs'):
                     idx = src.rindex('/src/')
                     hh = '$builddir/' + mode + '/gen/' + src[:idx] + '.hh'
@@ -2735,6 +2774,8 @@ def write_build_file(f,
         gen_dir = '$builddir/{}/gen'.format(mode)
         gen_headers = []
         for g in antlr3_grammars:
+            gen_headers += g.headers('$builddir/{}/gen'.format(mode))
+        for g in antlr4_grammars:
             gen_headers += g.headers('$builddir/{}/gen'.format(mode))
         for g in swaggers:
             gen_headers += g.headers('$builddir/{}/gen'.format(mode))
@@ -2792,6 +2833,13 @@ def write_build_file(f,
                     if '-DSANITIZE' in modeval['cxxflags'] and has_sanitize_address_use_after_scope:
                         flags += ' -fno-sanitize-address-use-after-scope'
                 f.write('  obj_cxxflags = %s\n' % flags)
+        for grammar in antlr4_grammars:
+            outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
+            f.write('build {}: antlr4.{} {}\n'.format(outs, mode, grammar.source))
+            for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
+                obj = cc.replace('.cpp', '.o')
+                f.write(f'build {obj}: cxx.{mode} {cc} | {profile_dep} || {" ".join(serializers)}\n')
+                f.write('  obj_cxxflags = -Wno-uninitialized -Wno-parentheses-equality\n')
         f.write(f'build $builddir/{mode}/gen/empty.cc: gen\n')
         for hh in headers:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc {profile_dep} || {gen_headers_dep}\n'.format(

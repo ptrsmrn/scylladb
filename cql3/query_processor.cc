@@ -21,7 +21,7 @@
 #include "service/mapreduce_service.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
-#include "cql3/CqlParser.hpp"
+#include "cql3/CqlParser.h"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/util.hh"
@@ -767,7 +767,7 @@ query_processor::parse_statement(const std::string_view& query, dialect d) {
                 }
             });
         }
-        auto statement = util::do_with_parser(query, d, std::mem_fn(&cql3_parser::CqlParser::query));
+        auto statement = util::do_with_parser(query, d, std::mem_fn(&cql3_parser::CqlParser::query_stmt));
         if (!statement) {
             throw exceptions::syntax_exception("Parsing failed");
         }
@@ -778,14 +778,19 @@ query_processor::parse_statement(const std::string_view& query, dialect d) {
         throw;
     } catch (const std::exception& e) {
         log.error("The statement: {} could not be parsed: {}", query, e.what());
-        throw exceptions::syntax_exception(seastar::format("Failed parsing statement: [{}] reason: {}", query, e.what()));
+        // Truncate the query in the error message to avoid overflowing the CQL wire protocol's
+        // uint16_t string length limit (65535 bytes) when large statements fail to parse.
+        static constexpr size_t max_query_len_in_error = 1000;
+        auto query_prefix = query.substr(0, max_query_len_in_error);
+        auto truncation_note = query.size() > max_query_len_in_error ? "... (truncated)" : "";
+        throw exceptions::syntax_exception(seastar::format("Failed parsing statement: [{}{}] reason: {}", query_prefix, truncation_note, e.what()));
     }
 }
 
 std::vector<std::unique_ptr<raw::parsed_statement>>
 query_processor::parse_statements(std::string_view queries, dialect d) {
     try {
-        auto statements = util::do_with_parser(queries, d, std::mem_fn(&cql3_parser::CqlParser::queries));
+        auto statements = util::do_with_parser(queries, d, std::mem_fn(&cql3_parser::CqlParser::queries_stmts));
         if (statements.empty()) {
             throw exceptions::syntax_exception("Parsing failed");
         }
@@ -796,7 +801,12 @@ query_processor::parse_statements(std::string_view queries, dialect d) {
         throw;
     } catch (const std::exception& e) {
         log.error("The statements: {} could not be parsed: {}", queries, e.what());
-        throw exceptions::syntax_exception(seastar::format("Failed parsing statements: [{}] reason: {}", queries, e.what()));
+        // Truncate the query in the error message to avoid overflowing the CQL wire protocol's
+        // uint16_t string length limit (65535 bytes) when large statements fail to parse.
+        static constexpr size_t max_query_len_in_error = 1000;
+        auto queries_prefix = queries.substr(0, max_query_len_in_error);
+        auto truncation_note = queries.size() > max_query_len_in_error ? "... (truncated)" : "";
+        throw exceptions::syntax_exception(seastar::format("Failed parsing statements: [{}{}] reason: {}", queries_prefix, truncation_note, e.what()));
     }
 }
 

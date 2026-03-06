@@ -10,7 +10,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "replica/database.hh"
-#include "cql3/CqlParser.hpp"
+#include "cql3/CqlParser.h"
 #include "cql3/util.hh"
 #include "cql_type_parser.hh"
 #include "types/types.hh"
@@ -22,7 +22,7 @@ static ::shared_ptr<cql3::cql3_type::raw> parse_raw(const sstring& str) {
     // should be dialect-agnostic.
     return cql3::util::do_with_parser(str, cql3::dialect{},
         [] (cql3_parser::CqlParser& parser) {
-            return parser.comparator_type(true);
+            return parser.comparator_type_raw(true);
         });
 }
 

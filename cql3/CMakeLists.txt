@@ -1,9 +1,9 @@
 include(generate_cql_grammar)
 
-find_package(ANTLR3 REQUIRED)
+find_package(ANTLR4 REQUIRED)
 
 generate_cql_grammar(
-  GRAMMAR Cql.g
+  GRAMMAR Cql.g4
   SOURCES cql_grammar_srcs)
 set_source_files_properties(${cql_grammar_srcs}
   PROPERTIES
@@ -12,18 +12,6 @@ set_source_files_properties(${cql_grammar_srcs}
 set(cql_parser_srcs ${cql_grammar_srcs})
 list(FILTER cql_parser_srcs INCLUDE REGEX "Parser.cpp$")
 
-set(unoptimized_modes "Coverage,Debug,Sanitize")
-set(sanitized_modes "Debug,Sanitize")
-set_property(
-    SOURCE ${cql_parser_srcs}
-    APPEND
-    PROPERTY COMPILE_OPTIONS
-      # Unoptimized parsers end up using huge amounts of stack space and
-      # overflowing their stack
-      $<$<CONFIG:${unoptimized_modes}>:-O1>
-      # use-after-scope sanitizer also uses large amount of stack space
-      # and overflows the stack of CqlParser
-      $<$<CONFIG:${sanitized_modes}>:-fsanitize-address-use-after-scope>)
 
 add_library(cql3 STATIC)
 target_sources(cql3
@@ -138,7 +126,7 @@ target_link_libraries(cql3
     Seastar::seastar
     absl::headers
     xxHash::xxhash
-    ANTLR3::antlr3
+    ANTLR4::antlr4-runtime
   PRIVATE
     lang
     transport)

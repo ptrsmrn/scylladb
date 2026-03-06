@@ -112,7 +112,7 @@ private:
 
     seastar::future<std::unique_ptr<seastar::http::reply>> handle_ann_request(
             std::unique_ptr<seastar::http::request> req, std::unique_ptr<seastar::http::reply> rep) {
-        request r{.path = INDEXES_PATH + "/" + req->get_path_param("path"), .body = co_await util::read_entire_stream_contiguous(*req->content_stream)};
+        request r{.path = INDEXES_PATH + "/" + req->get_path_param("path"), .body = co_await seastar::util::read_entire_stream_contiguous(*req->content_stream)};
         _ann_requests.push_back(std::move(r));
         rep->set_status(_next_ann_response.status);
         rep->write_body("json", _next_ann_response.body);

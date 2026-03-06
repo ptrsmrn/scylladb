@@ -15,7 +15,7 @@
 #include <seastar/core/sstring.hh>
 
 #include "cql3/column_identifier.hh"
-#include "cql3/CqlParser.hpp"
+#include "cql3/CqlParser.h"
 #include "cql3/error_collector.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/dialect.hh"
@@ -27,7 +27,7 @@ namespace util {
 
 void do_with_parser_impl(const std::string_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func);
 
-template <typename Func, typename Result = cql3_parser::unwrap_uninitialized_t<std::invoke_result_t<Func, cql3_parser::CqlParser&>>>
+template <typename Func, typename Result = cql3_parser::CqlParser::unwrap_uninitialized_t<std::invoke_result_t<Func, cql3_parser::CqlParser&>>>
 Result do_with_parser(const std::string_view& cql, dialect d, Func&& f) {
     std::optional<Result> ret;
     do_with_parser_impl(cql, d, [&] (cql3_parser::CqlParser& parser) {
