@@ -353,7 +353,7 @@ class TestSchemaManagement(Tester):
 
         logger.debug("Restarting node2")
         node2.start(wait_for_binary_proto=True)
-        session2 = self.patient_cql_connection(node2)
+        session2 = self.patient_exclusive_cql_connection(node2)
         read_barrier(session2)
 
         rows = session.execute(SimpleStatement("SELECT * FROM cf", consistency_level=ConsistencyLevel.ALL))
@@ -382,7 +382,7 @@ class TestSchemaManagement(Tester):
 
         logger.debug("Restarting node2")
         node2.start(wait_for_binary_proto=True)
-        session2 = self.patient_cql_connection(node2)
+        session2 = self.patient_exclusive_cql_connection(node2)
         read_barrier(session2)
 
         session.execute(SimpleStatement("INSERT INTO cf (p, v) VALUES (2, '2')", consistency_level=ConsistencyLevel.ALL))
