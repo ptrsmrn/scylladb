@@ -2052,8 +2052,35 @@ async def test_audit_composite_auth(manager: ManagerClient):
     await t.test_permissions(Composite)
 
 
+# AuditBackendStdout, no auth, rf=1
+
+async def test_audit_stdout_noauth(manager: ManagerClient):
+    """Stdout backend, no auth, single node."""
+    t = TestCQLAudit(manager)
+    await t.test_using_non_existent_keyspace(AuditBackendStdout)
+    await t.test_audit_keyspace(AuditBackendStdout)
+    await t.test_audit_keyspace_extra_parameter(AuditBackendStdout)
+    await t.test_audit_keyspace_many_ks(AuditBackendStdout)
+    await t.test_audit_keyspace_table_not_exists(AuditBackendStdout)
+    await t.test_audit_categories_part2(AuditBackendStdout)
+    await t.test_audit_categories_part3(AuditBackendStdout)
+    await t.test_prepare(AuditBackendStdout)
+    await t.test_batch(AuditBackendStdout)
+
+
+# AuditBackendStdout, auth, rf=1
+
+async def test_audit_stdout_auth(manager: ManagerClient):
+    """Stdout backend, auth enabled, single node."""
+    t = TestCQLAudit(manager)
+    await t.test_user_password_masking(AuditBackendStdout)
+    await t.test_role_password_masking(AuditBackendStdout)
+    await t.test_permissions(AuditBackendStdout)
+
+
 _syslog = functools.partial(AuditBackendSyslog, socket_path=syslog_socket_path)
 _composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_path)
+_stdout = AuditBackendStdout
 
 
 @pytest.mark.parametrize("helper_class,config_changer", [
@@ -2063,6 +2090,8 @@ _composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_
     pytest.param(_syslog, TestCQLAudit.AuditCqlConfigChanger, id="syslog-cql"),
     pytest.param(_composite, TestCQLAudit.AuditSighupConfigChanger, id="composite-sighup"),
     pytest.param(_composite, TestCQLAudit.AuditCqlConfigChanger, id="composite-cql"),
+    pytest.param(_stdout, TestCQLAudit.AuditSighupConfigChanger, id="stdout-sighup"),
+    pytest.param(_stdout, TestCQLAudit.AuditCqlConfigChanger, id="stdout-cql"),
 ])
 async def test_config_no_liveupdate(manager: ManagerClient, helper_class, config_changer):
     """Non-live audit config params (audit, audit_unix_socket_path, audit_syslog_write_buffer_size) must be unmodifiable."""
@@ -2076,6 +2105,8 @@ async def test_config_no_liveupdate(manager: ManagerClient, helper_class, config
     pytest.param(_syslog, TestCQLAudit.AuditCqlConfigChanger, id="syslog-cql"),
     pytest.param(_composite, TestCQLAudit.AuditSighupConfigChanger, id="composite-sighup"),
     pytest.param(_composite, TestCQLAudit.AuditCqlConfigChanger, id="composite-cql"),
+    pytest.param(_stdout, TestCQLAudit.AuditSighupConfigChanger, id="stdout-sighup"),
+    pytest.param(_stdout, TestCQLAudit.AuditCqlConfigChanger, id="stdout-cql"),
 ])
 async def test_config_liveupdate(manager: ManagerClient, helper_class, config_changer):
     """Live-updatable audit config params (categories, keyspaces, tables) must be modifiable at runtime."""
@@ -2086,6 +2117,7 @@ async def test_config_liveupdate(manager: ManagerClient, helper_class, config_ch
     pytest.param(AuditBackendTable, id="table"),
     pytest.param(_syslog, id="syslog"),
     pytest.param(_composite, id="composite"),
+    pytest.param(_stdout, id="stdout"),
 ])
 async def test_parallel_syslog_audit(manager: ManagerClient, helper_class):
     """Cluster must not fail when multiple queries are audited in parallel."""
