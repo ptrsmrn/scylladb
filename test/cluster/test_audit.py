@@ -243,6 +243,12 @@ class AuditTester:
             user=user, password=password,
             property_file=property_file,
             cmdline=cmdline)
+        servers = await self.manager.running_servers()
+        node_logs = []
+        for srv in servers:
+            log_file = await self.manager.server_open_log(srv.server_id)
+            node_logs.append(AuditLogNode(srv.ip_addr, log_file.file))
+        self.helper.set_nodes(node_logs)
         session = self.manager.get_cql()
         session.execute("DROP KEYSPACE IF EXISTS ks")
         if create_keyspace:
@@ -262,6 +268,9 @@ class AuditEntry:
     user: str
 
 
+AuditLogNode = namedtuple("AuditLogNode", ["address", "log_path"])
+
+
 class AuditBackend:
     def __init__(self, socket_path: str | None = None) -> None:
         super().__init__()
@@ -276,6 +285,9 @@ class AuditBackend:
         raise NotImplementedError
 
     def clear_audit_logs(self, session: Session | None = None) -> None:
+        pass
+
+    def set_nodes(self, nodes):
         pass
 
     def update_audit_settings(self, audit_settings, modifiers=None):
@@ -480,6 +492,10 @@ class AuditBackendComposite(AuditBackend):
         for backend in self.backends:
             backend.clear_audit_logs(session)
 
+    def set_nodes(self, nodes):
+        for backend in self.backends:
+            backend.set_nodes(nodes)
+
     def update_audit_settings(self, audit_settings, modifiers=None):
         if modifiers is None:
             modifiers = {}
@@ -509,6 +525,102 @@ class AuditBackendComposite(AuditBackend):
                 assert mode not in rows_dict
                 rows_dict[mode] = backend_rows
         return rows_dict
+
+
+class AuditBackendStdout(AuditBackend):
+    audit_default_settings = {"audit": "stdout", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+
+    def __init__(self, socket_path: str | None = None):
+        super().__init__(socket_path=socket_path)
+        self.nodes = []
+        self.node_start_marks = {}
+        self._node_lines = {}
+        self._accumulated_lines = []
+        self.named_tuple_factory = namedtuple("Row", ["date", "node", "event_time", "category", "consistency", "error", "keyspace_name", "operation", "source", "table_name", "username"])
+
+    @override
+    def audit_mode(self) -> str:
+        return "stdout"
+
+    def update_audit_settings(self, audit_settings, modifiers=None):
+        if modifiers is None:
+            modifiers = {}
+        new_audit_settings = copy.deepcopy(audit_settings or self.audit_default_settings)
+        # This is a hack. The test framework uses "table" as "not none".
+        # Appropriate audit mode should be passed from the test itself, and not set here.
+        # This converts "table" to its own audit mode, or keeps "none" as is.
+        if "audit" in new_audit_settings and new_audit_settings["audit"] == "table":
+            new_audit_settings["audit"] = self.audit_mode()
+        for key in modifiers:
+            new_audit_settings[key] = modifiers[key]
+        return new_audit_settings
+
+    @override
+    def clear_audit_logs(self, session: Session | None = None) -> None:
+        self.node_start_marks = {}
+        self._node_lines = {}
+        self._accumulated_lines = []
+        for node in self.nodes:
+            node_address = node.address
+            self.node_start_marks[node_address] = node.log_path.stat().st_size
+            self._node_lines[node_address] = []
+
+    def set_nodes(self, nodes):
+        self.nodes = list(nodes)
+
+    def _fetch_new_lines(self):
+        for node in self.nodes:
+            node_address = node.address
+            to_mark = node.log_path.stat().st_size
+            matched = []
+            with node.log_path.open(encoding="utf-8") as log_file:
+                log_file.seek(self.node_start_marks[node_address])
+                while True:
+                    pos = log_file.tell()
+                    if pos >= to_mark:
+                        break
+                    line = log_file.readline()
+                    if not line:
+                        break
+                    if pos + len(line) > to_mark:
+                        line = line[: to_mark - pos]
+                    if not line.endswith("\n"):
+                        break
+                    if "scylla-audit:" in line:
+                        matched.append(line.rstrip())
+            previous_lines = self._node_lines[node_address]
+            assert matched[: len(previous_lines)] == previous_lines, (
+                f"stdout audit log for {node_address} changed unexpectedly"
+            )
+            new_lines = matched[len(previous_lines) :]
+            self._node_lines[node_address] = matched
+            self._accumulated_lines.extend(new_lines)
+
+    def line_to_row(self, line, idx):
+        metadata, data = line.split(": ", 1)
+        data = "".join(data.splitlines()) # Remove newlines
+        fields = ["node", "category", "cl", "error", "keyspace", "query", "client_ip", "table", "username"]
+        regexp = ", ".join(f'{field}="(?P<{field}>.*)"' for field in fields)
+        match = re.match(regexp, data)
+
+        # Arbitrary date because we don't really check the field. We just need to fill it with something
+        # and make sure it doesn't change during the test (e.g. when the test is running at 23:59:59)
+        date = datetime.datetime(2000, 1, 1, 0, 0)
+
+        node = match.group("node").split(":")[0]
+        statement = match.group("query")
+        source = match.group("client_ip").split(":")[0]
+        event_time = uuid.UUID(int=idx)
+        t = self.named_tuple_factory(date, node, event_time, match.group("category"), match.group("cl"), match.group("error") == "true", match.group("keyspace"), statement, source, match.group("table"), match.group("username"))
+        return t
+
+    @override
+    def get_audit_log_dict(self, session, consistency_level):
+        self._fetch_new_lines()
+        entries = []
+        for idx, line in enumerate(self._accumulated_lines):
+            entries.append(self.line_to_row(line, idx))
+        return { self.audit_mode(): entries }
 
 
 @pytest.mark.single_node
@@ -982,6 +1094,31 @@ class TestCQLAudit(AuditTester):
 
         session.execute("DROP KEYSPACE ks")
         assert_invalid(session, "use audit;", expected=InvalidRequest)
+
+    async def test_audit_type_stdout(self):
+        """
+        'audit': stdout
+         check node started, ks audit not created
+        """
+        with AuditBackendStdout() as helper:
+            audit_settings = {"audit": "stdout", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+            session = await self.prepare(audit_settings=audit_settings, helper=helper)
+            assert_invalid(session, "use audit;", expected=InvalidRequest)
+            self.execute_and_validate_audit_entry(session, "CREATE TABLE test_stdout (k int PRIMARY KEY, v int)", category="DDL", table="test_stdout", audit_settings=audit_settings)
+
+    async def test_audit_type_table_stdout(self):
+        class AuditBackendTableStdoutComposite(AuditBackendComposite):
+            audit_default_settings = {"audit": "table,stdout", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+
+            def __init__(self):
+                AuditBackend.__init__(self)
+                self.backends = [AuditBackendTable(), AuditBackendStdout()]
+
+        with AuditBackendTableStdoutComposite() as helper:
+            audit_settings = helper.audit_default_settings
+            session = await self.prepare(audit_settings=audit_settings, helper=helper)
+            assert rows_to_list(session.execute("SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")) == [["audit"]]
+            self.execute_and_validate_audit_entry(session, "CREATE TABLE test_table_stdout (k int PRIMARY KEY, v int)", category="DDL", table="test_table_stdout", audit_settings=audit_settings)
 
     async def test_audit_type_invalid(self):
         """
@@ -1817,6 +1954,16 @@ async def test_audit_type_none_standalone(manager: ManagerClient):
 async def test_audit_type_invalid_standalone(manager: ManagerClient):
     """audit=invalid — server should fail to start."""
     await TestCQLAudit(manager).test_audit_type_invalid()
+
+
+async def test_audit_type_stdout_standalone(manager: ManagerClient):
+    """audit=stdout — verify audit entries are written without creating the audit keyspace."""
+    await TestCQLAudit(manager).test_audit_type_stdout()
+
+
+async def test_audit_type_table_stdout_standalone(manager: ManagerClient):
+    """audit=table,stdout — verify both sinks work together."""
+    await TestCQLAudit(manager).test_audit_type_table_stdout()
 
 
 async def test_composite_audit_type_invalid_standalone(manager: ManagerClient):
