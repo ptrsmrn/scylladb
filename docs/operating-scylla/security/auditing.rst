@@ -3,7 +3,7 @@ ScyllaDB Auditing Guide
 ========================
 
 Auditing allows the administrator to monitor activities on a Scylla cluster, including queries and data changes. 
-The information is stored in a Syslog or a Scylla table.
+The information is stored in a Syslog, a Scylla table, or the process standard output.
 
 Prerequisite
 ------------
@@ -20,7 +20,9 @@ You can set the following options:
 * ``none`` - Audit is disabled.
 * ``table`` - Audit is enabled, and messages are stored in a Scylla table (default).
 * ``syslog`` - Audit is enabled, and messages are sent to Syslog.
-* ``syslog,table`` - Audit is enabled, and messages are stored in a Scylla table and sent to Syslog.
+* ``stdout`` - Audit is enabled, and messages are written to the process standard output.
+
+Multiple backends can be combined with a comma, for example ``syslog,table`` or ``stdout,table``.
 
 Configuring any other value results in an error at Scylla startup.
 
@@ -70,7 +72,7 @@ Note that enabling audit may negatively impact performance and audit-to-table ma
 Configuring Audit Storage
 ---------------------------
 
-Auditing messages can be sent to :ref:`Syslog <auditing-syslog-storage>` or stored in a Scylla :ref:`table <auditing-table-storage>` or both.
+Auditing messages can be sent to :ref:`Syslog <auditing-syslog-storage>`, stored in a Scylla :ref:`table <auditing-table-storage>`, written to :ref:`stdout <auditing-stdout-storage>`, or any combination of these.
 
 .. _auditing-syslog-storage:
 
@@ -117,6 +119,57 @@ To redirect the Syslog output to a file, follow the steps below (available only 
 #. Edit ``/etc/rsyslog.conf`` and append the following to the file: ``if $programname contains 'scylla-audit' then /var/log/scylla-audit.log``.
 #. Start rsyslog ``systemctl start rsyslog``.
 #. Enable rsyslog ``systemctl enable rsyslog``.
+
+.. _auditing-stdout-storage:
+
+Storing Audit Messages in Stdout
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The stdout backend writes audit events to the process standard output. It is
+intended for containerised deployments (Kubernetes, Docker) where the container
+runtime captures stdout and forwards it to a centralised log aggregator such as
+FluentBit, Vector, or Loki. It avoids the need for a syslog daemon or a
+privileged ``/dev/log`` hostPath mount.
+
+**Procedure**
+
+#. Set the ``audit`` parameter in the ``scylla.yaml`` file to ``stdout``.
+
+   For example:
+
+   .. code-block:: shell
+
+      # audit setting
+      # 'audit' config option controls if and where to output audited events:
+      audit: "stdout"
+      #
+      # List of statement categories that should be audited.
+      audit_categories: "DCL,DDL,AUTH"
+      # 
+      # List of tables that should be audited.
+      audit_tables: "mykespace.mytable"
+      #
+      # List of keyspaces that should be fully audited.
+      # All tables in those keyspaces will be audited
+      audit_keyspaces: "mykespace"
+
+#. Restart the Scylla node.
+
+.. include:: /rst_include/scylla-commands-restart-index.rst
+
+Audit messages are written directly to the process standard output with
+``scylla-audit`` as an identifier.
+
+Logging output example (drop table):
+
+.. code-block:: shell
+
+   Mar 18 09:53:52 scylla-audit: node="10.143.2.108", category="DDL", cl="ONE", error="false", keyspace="nba", query="DROP TABLE nba.team_roster ;", client_ip="127.0.0.1", table="team_roster", username="anonymous"
+
+.. note:: The stdout backend does not JSON-escape field values. Embedded
+   quotes or newlines in CQL queries can break the ``key="value"`` layout.
+   If your log pipeline requires strict JSON, consider post-processing the
+   output or using the syslog backend instead.
 
 .. _auditing-table-storage:
 
@@ -213,6 +266,8 @@ In some cases, auditing may not be possible, for example, when:
 
 * A table is used as the audit’s backend, and the partitions where the audit rows are saved are unavailable because the nodes holding those partitions are down or unreachable due to network issues.
 * Syslog is used as the audit’s backend, and the Syslog sink (a regular Unix socket) is unresponsive or unavailable.
+
+* Stdout is used as the audit’s backend, and the standard output file descriptor is closed or the pipe is broken (for example, the container runtime terminated the log collector).
 
 If the audit fails and audit messages are not stored in the configured audit’s backend, you can still review the audit log in the regular ScyllaDB logs.
 
