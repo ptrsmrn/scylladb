@@ -31,6 +31,8 @@ namespace {
 
 logger mylog{"ldap_role_manager"}; // `log` is taken by math.
 
+constexpr std::string_view user_placeholder = "{USER}";
+
 struct url_desc_deleter {
     void operator()(LDAPURLDesc *p) {
         ldap_free_urldesc(p);
@@ -38,6 +40,77 @@ struct url_desc_deleter {
 };
 
 using url_desc_ptr = std::unique_ptr<LDAPURLDesc, url_desc_deleter>;
+
+/// Escapes LDAP filter assertion value per RFC 4515 Section 3.
+/// The characters *, (, ), \, and NUL must be backslash-hex-escaped
+/// to prevent filter injection when interpolating untrusted input.
+sstring escape_filter_value(std::string_view value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (unsigned char ch : value) {
+        switch (ch) {
+        case '*':  escaped.append("\\2a"); break;
+        case '(':  escaped.append("\\28"); break;
+        case ')':  escaped.append("\\29"); break;
+        case '\\': escaped.append("\\5c"); break;
+        case '\0': escaped.append("\\00"); break;
+        default:   escaped += static_cast<char>(ch); break;
+        }
+    }
+    return sstring(escaped);
+}
+
+/// Percent-encodes characters that are not RFC 3986 "unreserved"
+/// (ALPHA / DIGIT / '-' / '.' / '_' / '~').
+///
+/// This is applied AFTER RFC 4515 filter escaping when the value is
+/// substituted into an LDAP URL.  It serves two purposes:
+///  1. Prevents URL-level metacharacters ('?', '#') from breaking
+///     the URL structure parsed by ldap_url_parse.
+///  2. Prevents percent-decoding (which ldap_url_parse performs on
+///     each component) from undoing the filter escaping, e.g. a
+///     literal "%2a" in the username would otherwise decode to '*'.
+sstring percent_encode_for_url(std::string_view value) {
+    static constexpr char hex[] = "0123456789ABCDEF";
+    std::string encoded;
+    encoded.reserve(value.size());
+    for (unsigned char ch : value) {
+        if (std::isalnum(ch) || ch == '-' || ch == '.' || ch == '_' || ch == '~') {
+            encoded += static_cast<char>(ch);
+        } else {
+            encoded += '%';
+            encoded += hex[ch >> 4];
+            encoded += hex[ch & 0x0F];
+        }
+    }
+    return sstring(encoded);
+}
+
+/// Checks whether \p sentinel appears in any parsed URL component
+/// other than the filter (host, DN, attributes, extensions).
+bool sentinel_outside_filter(const LDAPURLDesc& desc, std::string_view sentinel) {
+    auto contains = [&](const char* field) {
+        return field && std::string_view(field).find(sentinel) != std::string_view::npos;
+    };
+    if (contains(desc.lud_host) || contains(desc.lud_dn)) {
+        return true;
+    }
+    if (desc.lud_attrs) {
+        for (int i = 0; desc.lud_attrs[i]; ++i) {
+            if (contains(desc.lud_attrs[i])) {
+                return true;
+            }
+        }
+    }
+    if (desc.lud_exts) {
+        for (int i = 0; desc.lud_exts[i]; ++i) {
+            if (contains(desc.lud_exts[i])) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 url_desc_ptr parse_url(std::string_view url) {
     LDAPURLDesc *desc = nullptr;
@@ -112,6 +185,7 @@ const resource_set& ldap_role_manager::protected_resources() const {
 }
 
 future<> ldap_role_manager::start() {
+    validate_query_template();
     if (!parse_url(get_url("dummy-user"))) { // Just need host and port -- any user should do.
         return make_exception_future(
                 std::runtime_error(fmt::format("error getting LDAP server address from template {}", _query_template)));
@@ -348,7 +422,46 @@ future<> ldap_role_manager::remove_attribute(std::string_view role_name, std::st
 }
 
 sstring ldap_role_manager::get_url(std::string_view user) const {
-    return boost::replace_all_copy(_query_template, "{USER}", user);
+    // Two-layer encoding protects against injection:
+    // 1. RFC 4515 filter escaping neutralizes filter metacharacters (*, (, ), \, NUL)
+    // 2. URL percent-encoding prevents URL structure injection (?, #) and blocks
+    //    ldap_url_parse's percent-decoding from undoing the filter escaping (%2a -> *)
+    return boost::replace_all_copy(_query_template, user_placeholder,
+            percent_encode_for_url(escape_filter_value(user)));
+}
+
+void ldap_role_manager::validate_query_template() const {
+    if (_query_template.find(user_placeholder) == sstring::npos) {
+        return;
+    }
+
+    // Substitute {USER} with a sentinel and let ldap_url_parse tell us
+    // which URL component it landed in.  The sentinel is purely
+    // alphanumeric so it cannot affect URL parsing.
+    static constexpr std::string_view sentinel = "XLDAPSENTINELX";
+    sstring test_url = boost::replace_all_copy(_query_template, user_placeholder, sentinel);
+    auto desc = parse_url(test_url);
+    if (!desc) {
+        throw url_error(format("LDAP URL template is not a valid URL when {{USER}} is substituted: {}", _query_template));
+    }
+
+    // The sentinel must appear in the filter ...
+    if (!desc->lud_filter
+            || std::string_view(desc->lud_filter).find(sentinel) == std::string_view::npos) {
+        throw url_error(format(
+                "LDAP URL template places {{USER}} outside the filter component. "
+                "RFC 4515 filter escaping only protects the filter; other components "
+                "(e.g. the base DN) require different escaping and are not supported. "
+                "Template: {}", _query_template));
+    }
+    // ... and nowhere else (host, DN, attributes, extensions).
+    if (sentinel_outside_filter(*desc, sentinel)) {
+        throw url_error(format(
+                "LDAP URL template places {{USER}} outside the filter component. "
+                "RFC 4515 filter escaping only protects the filter; other components "
+                "(e.g. the host) require different escaping and are not supported. "
+                "Template: {}", _query_template));
+    }
 }
 
 future<std::vector<cql3::description>> ldap_role_manager::describe_role_grants() {
