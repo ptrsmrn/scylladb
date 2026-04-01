@@ -8,11 +8,13 @@
 
 #include "audit/audit_stdout_storage_helper.hh"
 
-#include <cerrno>
-#include <system_error>
+#include <memory>
 #include <unistd.h>
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/fstream.hh>
+#include <seastar/core/iostream.hh>
+#include <seastar/core/smp.hh>
 
 #include <fmt/chrono.h>
 #include <fmt/format.h>
@@ -28,6 +30,45 @@ class query_processor;
 namespace audit {
 
 namespace {
+
+/// Writes audit messages to stdout, serialised on shard 0.
+///
+/// All audit writes are funnelled to shard 0 via smp::submit_to() and then
+/// serialised through a semaphore so that concurrent events from different
+/// shards don't interleave on the wire.
+///
+/// The I/O is performed asynchronously via seastar's chardev output stream
+/// (make_chardev_output_stream), which dispatches blocking write(2) calls to
+/// the reactor's thread pool.  This avoids stalling the reactor loop on I/O.
+///
+/// A dup()'d copy of STDOUT_FILENO is used because make_chardev_output_stream
+/// takes ownership of the fd and closes it on shutdown — we must not close the
+/// process's actual stdout descriptor.
+struct shard0_stdout_writer {
+    seastar::semaphore semaphore{1};
+    seastar::gate gate;
+    seastar::output_stream<char> stream;
+
+    shard0_stdout_writer(seastar::output_stream<char> os)
+            : stream(std::move(os)) {
+    }
+
+    future<> write(sstring msg) {
+        return seastar::with_gate(gate, [this, msg = std::move(msg)] () mutable -> future<> {
+            auto units = co_await get_units(semaphore, 1);
+            msg += "\n";
+            co_await stream.write(msg);
+            co_await stream.flush();
+        });
+    }
+
+    future<> stop() {
+        co_await gate.close();
+        co_await stream.close();
+    }
+};
+
+thread_local std::unique_ptr<shard0_stdout_writer> local_writer;
 
 /// Collapse newlines so each audit record stays on a single log line.
 static sstring flatten_stdout_field(std::string_view value) {
@@ -68,54 +109,14 @@ static sstring make_stdout_audit_message(socket_address node_ip,
 
 } // anonymous namespace
 
-// ---- stdout_send_helper: per-shard serialized write ----
-//
-// Mirrors syslog_send_helper():
-//   1. Acquire the per-shard semaphore (serialize writes within a shard).
-//   2. Write the message + newline to _fd via POSIX write(2).
-//
-// Why not use Seastar async I/O primitives?
-//
-//   - io_queue::submit_io_write():  The Seastar I/O scheduler dispatches
-//     writes through the reactor backend.  On the linux-aio backend
-//     (IOCB_CMD_PWRITE via io_submit) this fails with EOPNOTSUPP for
-//     non-filesystem fds such as pipes or dup'd stdout.  On io_uring the
-//     call would work (IORING_OP_WRITE handles any fd), but we cannot
-//     require io_uring — linux-aio is the default on many production
-//     kernels.
-//
-//   - pollable_fd::write_all():  The pollable_fd write path ultimately
-//     calls sendmsg() with MSG_NOSIGNAL (see reactor::do_sendmsg and the
-//     io_uring backend's sendmsg codepath).  sendmsg() returns ENOTSOCK
-//     on non-socket fds (pipes, regular files), so this is unusable.
-//     Additionally, regular files cannot be registered with epoll
-//     (EPERM), which breaks the pollable_fd readiness model.
-//
-// The synchronous write(2) approach is the same one Seastar's own logger
-// uses for stderr/stdout output (see seastar/src/util/log.cc).  Audit
-// messages are well under PIPE_BUF (4096 on Linux), so the kernel
-// handles them as a single atomic buffer copy — the stdout analogue of
-// syslog's datagram atomicity.  The syslog audit backend similarly
-// relies on a synchronous datagram_channel::send() that performs a
-// sendmsg() syscall directly on the reactor thread.
 future<> audit_stdout_storage_helper::stdout_send_helper(sstring msg) {
     try {
-        auto lock = co_await get_units(_semaphore, 1, std::chrono::hours(1));
-
-        msg += "\n";
-        const char* ptr = msg.data();
-        size_t remaining = msg.size();
-        while (remaining) {
-            auto written = ::write(_fd, ptr, remaining);
-            if (written == -1) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                throw std::system_error(errno, std::system_category(), "stdout audit write");
+        co_await seastar::smp::submit_to(0, [msg = std::move(msg)] () mutable {
+            if (!local_writer) {
+                throw std::logic_error("stdout audit backend is not started");
             }
-            ptr += written;
-            remaining -= written;
-        }
+            return local_writer->write(std::move(msg));
+        });
     } catch (const std::exception& e) {
         auto error_msg = seastar::format(
             "Stdout audit backend failed (writing a message to stdout resulted in {}).",
@@ -125,31 +126,31 @@ future<> audit_stdout_storage_helper::stdout_send_helper(sstring msg) {
     }
 }
 
-audit_stdout_storage_helper::audit_stdout_storage_helper(cql3::query_processor& /*qp*/, service::migration_manager& /*mm*/)
-    : _fd(::dup(STDOUT_FILENO))
-    , _semaphore(1) {
-    if (_fd == -1) {
-        throw std::system_error(errno, std::system_category(), "dup(STDOUT_FILENO)");
-    }
+audit_stdout_storage_helper::audit_stdout_storage_helper(cql3::query_processor& /*qp*/, service::migration_manager& /*mm*/) {
 }
 
-audit_stdout_storage_helper::~audit_stdout_storage_helper() {
-    if (_fd != -1) {
-        ::close(_fd);
-    }
-}
+audit_stdout_storage_helper::~audit_stdout_storage_helper() = default;
 
 future<> audit_stdout_storage_helper::start(const db::config& /*cfg*/) {
     if (this_shard_id() == 0) {
+        // dup() STDOUT_FILENO because make_chardev_output_stream takes
+        // ownership of the fd and closes it when the stream is shut down.
+        // We must not close the process's actual stdout.
+        int fd = ::dup(STDOUT_FILENO);
+        if (fd == -1) {
+            throw std::system_error(errno, std::system_category(), "dup(STDOUT_FILENO) for audit");
+        }
+        auto os = seastar::make_chardev_output_stream(seastar::file_desc::from_fd(fd));
+        local_writer = std::make_unique<shard0_stdout_writer>(std::move(os));
         logger.info("Initializing stdout audit backend.");
     }
     co_return;
 }
 
 future<> audit_stdout_storage_helper::stop() {
-    if (_fd != -1) {
-        ::close(_fd);
-        _fd = -1;
+    if (this_shard_id() == 0 && local_writer) {
+        co_await local_writer->stop();
+        local_writer.reset();
     }
     co_return;
 }

@@ -7,8 +7,6 @@
  */
 #pragma once
 
-#include <seastar/core/semaphore.hh>
-
 #include "audit/audit.hh"
 #include "storage_helper.hh"
 #include "db/config.hh"
@@ -35,9 +33,6 @@ namespace audit {
 /// Vector, etc.).  It avoids the need for a syslog daemon or a privileged
 /// /dev/log hostPath mount.
 class audit_stdout_storage_helper : public storage_helper {
-    int _fd;
-    seastar::semaphore _semaphore;
-
     future<> stdout_send_helper(sstring msg);
 public:
     explicit audit_stdout_storage_helper(cql3::query_processor&, service::migration_manager&);
