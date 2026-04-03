@@ -22,6 +22,7 @@
 #include "index/secondary_index_manager.hh"
 #include "replica/database.hh"
 #include "replica/global_table_ptr.hh"
+#include "replica/schema_describe_helper.hh"
 #include "sstables/sstables_manager.hh"
 #include "service/storage_proxy.hh"
 
@@ -196,7 +197,26 @@ snapshot_ctl::get_snapshot_details() {
     using snapshot_map = std::unordered_map<sstring, db_snapshot_details>;
 
     co_return co_await run_snapshot_list_operation(coroutine::lambda([this] () -> future<snapshot_map> {
-        return _db.local().get_snapshot_details();
+        auto details = co_await _db.local().get_snapshot_details();
+
+        for (auto& [snapshot_name, snapshot_details] : details) {
+            for (auto& table : snapshot_details) {
+                auto schema = _db.local().as_data_dictionary().try_find_table(
+                        table.ks, table.cf);
+                if (!schema || !schema->schema()->is_view()) {
+                    continue;
+                }
+
+                auto helper = replica::make_schema_describe_helper(
+                        schema->schema(), _db.local().as_data_dictionary());
+                if (helper.type == schema_describe_helper::type::index) {
+                    table.cf = secondary_index::index_name_from_table_name(
+                            table.cf);
+                }
+            }
+        }
+
+        co_return details;
     }));
 }
 

@@ -420,11 +420,11 @@ def test_storage_service_snapshot_mv_si(cql, this_dc, rest_api):
                     })
 
                 with new_secondary_index(cql, table, 'v', 'si') as si:
-                    named_index_desc = cql.execute(f"DESC INDEX {si}").one()
-                    with new_test_snapshot(rest_api, keyspace, named_index_desc.name) as snap:
+                    index_name = si.split('.')[1]
+                    with new_test_snapshot(rest_api, keyspace, index_name) as snap:
                         verify_snapshot_details(rest_api, {
                             'key': snap,
-                            'value': [{'ks': keyspace, 'cf': named_index_desc.name, 'total': 0, 'live': 0}]
+                            'value': [{'ks': keyspace, 'cf': index_name, 'total': 0, 'live': 0}]
                         })
 
                 ks, cf = table.split('.')
