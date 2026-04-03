@@ -18,6 +18,8 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db/snapshot-ctl.hh"
 #include "db/snapshot/backup_task.hh"
+#include "db/schema_tables.hh"
+#include "index/secondary_index_manager.hh"
 #include "replica/database.hh"
 #include "replica/global_table_ptr.hh"
 #include "sstables/sstables_manager.hh"
@@ -154,7 +156,31 @@ future<> snapshot_ctl::do_take_cluster_column_family_snapshot(std::vector<sstrin
     );
 }
 
+sstring snapshot_ctl::resolve_table_name(const sstring& ks_name, const sstring& name) const {
+    try {
+        _db.local().find_uuid(ks_name, name);
+        return name;
+    } catch (const data_dictionary::no_such_column_family&) {
+        // The name may be a logical index name (e.g. "myindex").
+        // Only indexes with a backing view have a separate backing table
+        // that can be snapshotted. Custom indexes such as vector indexes
+        // do not, so keep rejecting them here rather than mapping them to
+        // a synthetic name.
+        auto schema = _db.local().find_indexed_table(ks_name, name);
+        if (schema) {
+            const auto& im = schema->all_indices().at(name);
+            if (db::schema_tables::view_should_exist(im)) {
+                return secondary_index::index_table_name(name);
+            }
+        }
+        throw;
+    }
+}
+
 future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts) {
+    for (auto& t : tables) {
+        t = resolve_table_name(ks_name, t);
+    }
     co_await check_snapshot_not_exist(ks_name, tag, tables);
     co_await replica::database::snapshot_tables_on_all_shards(_db, ks_name, std::move(tables), std::move(tag), opts);
 }
