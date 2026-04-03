@@ -1186,10 +1186,18 @@ cql3::description schema::describe(const schema_describe_helper& helper, cql3::d
         }
     });
 
+    // For indexes, cf_name() returns the backing materialized view's
+    // table name (e.g. "myindex_index"), not the logical index name
+    // (e.g. "myindex"). Derive the correct name so all callers get
+    // the user-facing index name.
+    sstring name = helper.type == schema_describe_helper::type::index
+            ? secondary_index::index_name_from_table_name(cf_name())
+            : cf_name();
+
     return cql3::description {
         .keyspace = ks_name(),
         .type = std::move(type),
-        .name = cf_name(),
+        .name = std::move(name),
         .create_statement = desc_opt == cql3::describe_option::NO_STMTS
                 ? std::nullopt
                 : std::make_optional(get_create_statement(helper, desc_opt == cql3::describe_option::STMTS_AND_INTERNALS))

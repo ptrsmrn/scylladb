@@ -1459,9 +1459,7 @@ def test_describe_secondary_index(cql, test_keyspace, scylla_only):
         assert result.type == "index"
 
         assert hasattr(result, "name")
-        # FIXME: This should be equal to `index_name` instead of the name of the underlying materialized view.
-        underlying_mv_name = f"{index_name}_index"
-        assert result.name == underlying_mv_name
+        assert result.name == index_name
 
         assert hasattr(result, "create_statement")
         assert result.create_statement == stmt
