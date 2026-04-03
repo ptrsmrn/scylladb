@@ -2046,6 +2046,8 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                 co_await snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, opts);
             }
             co_return json_void();
+        } catch (const data_dictionary::no_such_column_family& e) {
+            throw httpd::bad_param_exception(e.what());
         } catch (...) {
             apilog.error("take_snapshot failed: {}", std::current_exception());
             throw;
@@ -2082,6 +2084,8 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         try {
             co_await snap_ctl.local().clear_snapshot(tag, keynames, column_family);
             co_return json_void();
+        } catch (const data_dictionary::no_such_column_family& e) {
+            throw httpd::bad_param_exception(e.what());
         } catch (...) {
             apilog.error("del_snapshot failed: {}", std::current_exception());
             throw;
