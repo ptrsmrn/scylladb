@@ -187,8 +187,26 @@ future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vect
 }
 
 future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name) {
-    return run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name)] {
-        return _db.local().clear_snapshot(tag, keyspace_names, cf_name);
+    co_return co_await run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name)] (this auto) -> future<> {
+        // clear_snapshot enumerates keyspace_names and uses cf_name as a
+        // filter in each. When cf_name needs resolution (e.g. logical index
+        // name -> backing table name), the result may differ per keyspace,
+        // so resolve and clear individually.
+        if (!cf_name.empty() && !keyspace_names.empty()) {
+            std::vector<std::pair<sstring, sstring>> resolved_targets;
+            resolved_targets.reserve(keyspace_names.size());
+
+            // Resolve every keyspace first so a later failure doesn't delete
+            // snapshots that were already matched in earlier keyspaces.
+            for (const auto& ks_name : keyspace_names) {
+                resolved_targets.emplace_back(ks_name, resolve_table_name(ks_name, cf_name));
+            }
+            for (auto& [ks_name, resolved_cf_name] : resolved_targets) {
+                co_await _db.local().clear_snapshot(tag, {ks_name}, std::move(resolved_cf_name));
+            }
+            co_return;
+        }
+        co_await _db.local().clear_snapshot(std::move(tag), std::move(keyspace_names), cf_name);
     });
 }
 
